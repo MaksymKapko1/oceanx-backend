@@ -19,7 +19,6 @@ class PacificaWSConnection:
         self.is_running = False
         self.active_subs = {}
 
-        # FIX 1: Event для ожидания реального открытия сокета
         self._connected = asyncio.Event()
 
     async def wait_until_connected(self, timeout=10):
@@ -39,11 +38,9 @@ class PacificaWSConnection:
                 ) as ws:
                     self.ws = ws
 
-                    # FIX 1: Сигналим что сокет реально открыт
                     self._connected.set()
                     logger.info(f"✅ WS Connection [{self.conn_id}] established.")
 
-                    # Восстанавливаем подписки после реконнекта
                     for sub_id, params in self.active_subs.items():
                         await self.send_subscribe(params)
                         logger.info(f"🔄 [{self.conn_id}] Re-subscribed: {sub_id}")
