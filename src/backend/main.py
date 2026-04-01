@@ -3,6 +3,7 @@ import logging
 import json
 import uvicorn
 import asyncpg
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,10 +26,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = "postgresql://maksym@localhost:5432/maksym"
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    user = os.getenv("DB_USER", 'maksym')
+    password = os.getenv("DB_PASS", '')
+    host = os.getenv("DB_HOST", "localhost")
+    port = os.getenv("DB_PORT", "5432")
+    db_name = os.getenv("DB_NAME", "maksym")
+
+    DATABASE_URL = f"postgresql://{user}:{password}@{host}:{port}/{db_name}"
+
 WS_URL = "wss://ws.pacifica.fi/ws"
 
-# Делаем listener глобальным, чтобы эндпоинт мог отправлять в него команды
 ws_listener = None
 
 
