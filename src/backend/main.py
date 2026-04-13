@@ -55,9 +55,9 @@ async def lifespan(app: FastAPI):
     app.state.db_pool = db_pool
     await init_db(db_pool)
 
-    from services.trade_executor import CopyTradeExecutor
     executor = CopyTradeExecutor(db_pool)
     await executor.start_background_tasks()
+    app.state.executor = executor
 
     ws_listener = PacificaWSListener(
         ws_uri=WS_URL,
@@ -67,12 +67,8 @@ async def lifespan(app: FastAPI):
     )
 
     app.state.ws_listener = ws_listener
-    app.state.executor = executor
 
     client_task = asyncio.create_task(pacifica_client.run(db_pool))
-
-    executor = CopyTradeExecutor(db_pool)
-    await executor.start_background_tasks()  # Запускаем вечный цикл чекера балансов
 
     retries = 0
     while not pacifica_client.cache.get('markets') and retries < 10:
@@ -102,7 +98,11 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://oceanxx.xyz", "https://www.oceanxx.xyz", "oceanx-frontend.vercel.app"],
+    allow_origins=["http://localhost:5173",
+                   "https://oceanxx.xyz",
+                   "https://www.oceanxx.xyz",
+                   "https://oceanx-frontend.vercel.app"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
