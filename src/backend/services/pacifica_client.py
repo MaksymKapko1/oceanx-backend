@@ -4,6 +4,7 @@ import logging
 import asyncpg
 import time
 import os
+import itertools
 from typing import Optional
 
 from db.volume import insert_daily_volume
@@ -18,7 +19,7 @@ BASE_URL = 'https://api.pacifica.fi/api/v1/'
 class PacificaClient:
     def __init__(self, base_url = "https://api.pacifica.fi"):
         self.base_url = base_url
-        self.api_key = os.getenv("PACIFICA_API_KEY")
+        self.api_key = os.getenv("PACIFICA_API_KEYS")
         self.session: Optional[aiohttp.ClientSession] = None
         self.pool: Optional[asyncpg.Pool] = None
         self.cache = {
@@ -31,6 +32,15 @@ class PacificaClient:
             'mark_price': 0.0,
         }
         self.refresh_interval = 10
+        raw_keys = os.getenv("PACIFICA_API_KEYS")
+        self.api_keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
+
+        if self.api_keys:
+            self.key_rotator = itertools.cycle(self.api_keys)
+            logger.info(f"🔑 Ротатор заряжен: {len(self.api_keys)} ключей в пуле.")
+        else:
+            self.key_rotator = None
+            logger.warning("⚠️ PACIFICA_API_KEYS не найдены! Работаем без ключей (жесткие лимиты).")
         self.scheduler = AsyncIOScheduler(timezone="UTC")
 
     def _get_headers(self):
@@ -38,8 +48,10 @@ class PacificaClient:
             "Content-Type": "application/json",
             "Accept": "application/json"
         }
-        if self.api_key:
-            headers["PF-API-KEY"] = self.api_key
+        if self.key_rotator:
+            current_key = next(self.key_rotator)
+            headers["PF-API-KEY"] = current_key
+
         return headers
 
     async def start(self):
@@ -66,7 +78,7 @@ class PacificaClient:
         asyncio.create_task(self.fetch_historical_volume_full())
 
         self.scheduler.add_job(
-            self.fetch_historical_volume_incremental(),
+            self.fetch_historical_volume_incremental,
             CronTrigger(hour=0, minute=5),
             id="daily_volume_sync"
         )
@@ -74,24 +86,37 @@ class PacificaClient:
         logger.info("⏰ Планировщик запущен: обновление объемов каждый день в 00:05 UTC")
 
         while True:
-            await self.fetch_pnl_leaderboard()
-            await self.fetch_daily_volume()
+            try:
+                await self.fetch_pnl_leaderboard()
+                await self.fetch_daily_volume()
+            except Exception as e:
+                logger.error(f"🔥 ОШИБКА В ФОНОВОМ ЦИКЛЕ (но мы живем дальше): {e}", exc_info=True)
             await asyncio.sleep(self.refresh_interval)
 
-    async def _fetch(self, endpoint: str) -> Optional[dict | list]:
+    async def _fetch(self, endpoint: str) -> dict | None | int:
+        if self.session is None or self.session.closed:
+            logger.warning("⚠️ Сессия закрыта, пересоздаём...")
+            await self.start()
+
         try:
             async with self.session.get(endpoint, headers=self._get_headers()) as response:
                 rl_header = response.headers.get("ratelimit")
+                refresh_in = 0
                 if rl_header:
                     parts = {p.split('=')[0]: p.split('=')[1] for p in rl_header.split(';') if '=' in p}
-                    remaining = float(parts.get('r', 0)) / 10  # Делим на 10, как просят в доках
-                    refresh_in = parts.get('t', 0)
+                    remaining = float(parts.get('r', 0)) / 10
+                    refresh_in = int(float(parts.get('t', 0)))# Делим на 10, как просят в доках1
 
                     if remaining < 50:
                         logger.warning(
                             f"⚠️ LOW RATE LIMIT (REST): {remaining} credits left. Refreshes in {refresh_in}s")
                 if response.status == 200:
                     return await response.json()
+
+                if response.status == 429:
+                    wait_time = refresh_in if refresh_in > 0 else 60
+                    logger.warning(f"🛑 RATE LIMIT HIT! Биржа просит подождать {wait_time} секунд.")
+                    return wait_time
                 logger.warning(f"⚠️ {endpoint} → HTTP {response.status}")
                 return None
         except aiohttp.ClientConnectionError:
@@ -113,17 +138,15 @@ class PacificaClient:
         if not raw_leaderboard:
             return self.cache['pnl_1d_leaderboard']
 
-        sort_field = f'pnl_{period}' if period != 'all_time' else 'pnl_all_time'
+        clean_data = [
+            x for x in raw_leaderboard
+            if float(x.get('volume_all_time') or 0) > 0
+        ]
+        clean_data.sort(key=lambda x: float(x.get('pnl_1d') or 0), reverse=True)
 
-        sorted_leaderboard = sorted(
-            raw_leaderboard,
-            key=lambda x: float(x.get(sort_field) or 0),
-            reverse=True
-        )
-
-        self.cache['pnl_1d_leaderboard'] = sorted_leaderboard
+        self.cache['pnl_1d_leaderboard'] = clean_data
         # logger.info(f"✅ Leaderboard загружен: {len(sorted_leaderboard)} трейдеров, сортировка по {sort_field}")
-        return sorted_leaderboard
+        return clean_data
 
     async def fetch_markets(self) -> list[str]:
         """"info"""
@@ -133,16 +156,29 @@ class PacificaClient:
             return self.cache.get('markets', [])
 
         raw_markets = data.get('data', [])
-        ticker = [market['symbol'] for market in raw_markets]
-        self.cache['markets'] = ticker
+        market_info_dict = {}
+        tickers = []
 
-        logger.info(f"✅ Tickers loaded: {len(ticker)} → {ticker}")
+        for market in raw_markets:
+            symbol = market['symbol']
+            tickers.append(symbol)
 
-        return ticker
+            market_info_dict[symbol] = {
+                'lot_size': float(market['lot_size']),
+                'tick_size': float(market['tick_size']),
+                'max_leverage': float(market.get('max_leverage', 1.0))
+            }
+        self.cache['markets'] = tickers
+        self.cache['market_info'] = market_info_dict
+
+        logger.info(f"✅ Tickers loaded: {len(tickers)} → {tickers}")
+
+        return tickers
 
     async def fetch_daily_volume(self) -> tuple[float, float]:
         """"info/prices"""
-        data = await self._fetch('info/prices')
+        endpoint = f'info/prices?t={int(time.time() * 1000)}'
+        data = await self._fetch(endpoint)
 
         if not data:
             return self.cache.get('daily_volume', 0), self.cache.get('open_interest', 0)
@@ -237,8 +273,8 @@ class PacificaClient:
 
                 daily_totals[t] = daily_totals.get(t, 0) + volume_usd
 
-            logger.info(f"📈 Обработан {ticker}")
-            await asyncio.sleep(4)  # rate limit
+            # logger.info(f"📈 Обработан {ticker}")
+            await asyncio.sleep(4)
 
         if not self.pool:
             logger.error("❌ pool не задан, запись в БД невозможна")
@@ -248,5 +284,28 @@ class PacificaClient:
             await insert_daily_volume(self.pool, t, vol)
 
         logger.info(f"💾 Записано {len(daily_totals)} дней в БД")
+
+
+    async def fetch_user_balance(self, wallet_address: str, max_retries=3) -> float:
+        endpoint = f"account?account={wallet_address}"
+
+        for attempt in range(max_retries):
+            result = await self._fetch(endpoint)
+
+            # Если получили словарь (успех)
+            if isinstance(result, dict) and "data" in result:
+                return float(result["data"].get("available_to_spend", 0))
+
+            if isinstance(result, int):
+                wait_time = result
+                logger.info(f"⏳ Спим {wait_time}с из-за лимитов перед попыткой {attempt + 2}...")
+                await asyncio.sleep(wait_time)
+                continue
+
+            if result is None:
+                await asyncio.sleep(1)
+
+        logger.error(f"❌ Не удалось получить баланс для {wallet_address[:6]} после {max_retries} попыток.")
+        return 0.0
 
 pacifica_client = PacificaClient()

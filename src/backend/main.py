@@ -9,12 +9,18 @@ from fastapi import FastAPI, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocket
 from dotenv import load_dotenv
+
+from services.trade_executor import CopyTradeExecutor
+
 load_dotenv()
 
 from services.pacifica_client import pacifica_client
 from routers.pnl_leaderboard import router as leaderboard_router
 from routers.liquidations_router import router as liquidations_router
 from routers.overview import router as stats_router
+from routers.auth_router import router as auth_router
+from routers import copy_router
+from routers.user_settings_router import router as settings_router
 from db.schema import init_db
 from core.connection_manager import ws_manager
 from services.pacifica_ws import PacificaWSListener
@@ -36,10 +42,10 @@ if not DATABASE_URL:
 
     DATABASE_URL = f"postgresql://{user}:{password}@{host}:{port}/{db_name}"
 
+print(f"👉 ПЫТАЮСЬ ПОДКЛЮЧИТЬСЯ К БАЗЕ: {DATABASE_URL}")
 WS_URL = "wss://ws.pacifica.fi/ws"
 
 ws_listener = None
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -49,13 +55,24 @@ async def lifespan(app: FastAPI):
     app.state.db_pool = db_pool
     await init_db(db_pool)
 
+    from services.trade_executor import CopyTradeExecutor
+    executor = CopyTradeExecutor(db_pool)
+    await executor.start_background_tasks()
+
     ws_listener = PacificaWSListener(
         ws_uri=WS_URL,
         ws_manager=ws_manager,
-        db_pool=db_pool
+        db_pool=db_pool,
+        executor=executor
     )
 
+    app.state.ws_listener = ws_listener
+    app.state.executor = executor
+
     client_task = asyncio.create_task(pacifica_client.run(db_pool))
+
+    executor = CopyTradeExecutor(db_pool)
+    await executor.start_background_tasks()  # Запускаем вечный цикл чекера балансов
 
     retries = 0
     while not pacifica_client.cache.get('markets') and retries < 10:
@@ -73,7 +90,6 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Сервер запущен")
     yield
 
-    # --- ВЫКЛЮЧЕНИЕ СЕРВЕРА ---
     ws_listener.stop()
     await pacifica_client.stop()
     client_task.cancel()
@@ -94,7 +110,9 @@ app.add_middleware(
 app.include_router(leaderboard_router)
 app.include_router(liquidations_router)
 app.include_router(stats_router)
-
+app.include_router(auth_router)
+app.include_router(copy_router.router)
+app.include_router(settings_router)
 
 @app.get("/")
 async def root():

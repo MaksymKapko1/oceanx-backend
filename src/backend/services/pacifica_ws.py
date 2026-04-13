@@ -7,8 +7,6 @@ from collections import deque
 from db.liquidations import insert_liquidation
 
 logger = logging.getLogger(__name__)
-
-
 class PacificaWSConnection:
     def __init__(self, ws_uri, headers, conn_id, listener):
         self.ws_uri = ws_uri
@@ -55,7 +53,6 @@ class PacificaWSConnection:
                 if self.is_running:
                     logger.warning(f"⚠️ WS [{self.conn_id}] reconnecting in 5s... Error: {e}")
 
-                # FIX 1: Сбрасываем event при обрыве, чтобы следующие вызовы wait_until_connected ждали
                 self._connected.clear()
                 self.ws = None
                 await asyncio.sleep(5)
@@ -91,10 +88,11 @@ class PacificaWSConnection:
 
 
 class PacificaWSListener:
-    def __init__(self, ws_uri: str, ws_manager, db_pool=None):
+    def __init__(self, ws_uri: str, ws_manager, db_pool=None, executor=None):
         self.ws_uri = ws_uri
         self.ws_manager = ws_manager
         self.db_pool = db_pool
+        self.executor = executor
 
         self.ticker = []
         self._is_running = False
@@ -107,8 +105,9 @@ class PacificaWSListener:
         self.extra_headers = {}
         self.MAX_SUBS = 18
 
-        # FIX 4: Храним tasks чтобы GC их не убил
         self._tasks = []
+
+        self.active_masters = set()
 
     def set_markets(self, ticker: list[str]):
         self.ticker = ticker
@@ -137,31 +136,94 @@ class PacificaWSListener:
 
         num_conns = max(4, (len(self.ticker) // self.MAX_SUBS) + 1)
 
-        # FIX 4: Используем хелпер вместо прямого create_task
         for i in range(num_conns):
             self._create_connection(i)
 
         logger.info(f"🚀 Initialized WS Pool with {num_conns} connections.")
 
-        # FIX 1: Ждём реального открытия всех сокетов перед подпиской
         logger.info("⏳ Waiting for all connections to establish...")
         await asyncio.gather(*[conn.wait_until_connected() for conn in self.connections])
         logger.info("✅ All connections ready. Subscribing...")
 
         for ticker in self.ticker:
             await self.subscribe({"source": "trades", "symbol": ticker})
-
         for hot_token in self.HOT_TOKENS:
             if hot_token in self.ticker:
                 await self.subscribe({"source": "book", "symbol": hot_token, "agg_level": 1})
 
+        self._tasks.append(asyncio.create_task(self._sync_masters_loop()))
+        logger.info("🕵️‍♂️ Master sync loop started.")
         logger.info(f"📡 Distributed {len(self.ticker)} trade subs + {len(self.HOT_TOKENS)} book subs across the pool.")
+
+    async def add_master_instantly(self, master_address: str):
+        if master_address not in self.active_masters:
+            await self.subscribe({"source": "account_trades", "account": master_address})
+            self.active_masters.add(master_address)
+            logger.info(f"⚡ МОМЕНТАЛЬНАЯ подписка на мастера: {master_address}")
+
+    async def remove_master_instantly(self, master_address: str):
+        if master_address not in self.active_masters:
+            return
+
+        try:
+            async with self.db_pool.acquire() as conn:
+                active_followers_count = await conn.fetchval(
+                    """
+                    SELECT COUNT(*) 
+                    FROM subscriptions 
+                    WHERE master_wallet = $1 AND is_active = TRUE
+                    """,
+                    master_address
+                )
+
+            if active_followers_count == 0:
+                sub_trades = self._generate_sub_id({"source": "account_trades", "account": master_address})
+
+                await self.unsubscribe(sub_trades)
+
+                self.active_masters.remove(master_address)
+
+                logger.info(f"🗑️ WebSocket связь разорвана: на мастера {master_address} больше нет подписчиков.")
+            else:
+                logger.info(
+                    f"ℹ️ Связь сохранена: за мастером {master_address} всё еще следят {active_followers_count} чел.")
+
+        except Exception as e:
+            logger.error(f"Ошибка при попытке отписки от мастера {master_address}: {e}")
+
+    async def _sync_masters_loop(self):
+        while self._is_running:
+            if not self.db_pool:
+                await asyncio.sleep(10)
+                continue
+
+            try:
+                async with self.db_pool.acquire() as conn:
+                    rows = await conn.fetch("SELECT DISTINCT master_wallet FROM subscriptions WHERE is_active = TRUE")
+                    #TODO
+                    db_masters = set(row['master_wallet'] for row in rows)
+
+                to_add = db_masters - self.active_masters
+                for master in to_add:
+                    await self.subscribe({"source": "account_trades", "account": master})
+                    self.active_masters.add(master)
+                    logger.info(f"🎯 Начали следить за новым мастером: {master}")
+
+                to_remove = self.active_masters - db_masters
+                for master in to_remove:
+                    sub_trades = self._generate_sub_id({"source": "account_trades", "account": master})
+                    await self.unsubscribe(sub_trades)
+                    self.active_masters.remove(master)
+                    logger.info(f"🛑 Прекратили следить за мастером: {master}")
+            except Exception as e:
+                logger.error(f"Ошибка синхронизации мастеров: {e}")
+            await asyncio.sleep(20)
 
     def stop(self):
         self._is_running = False
         for conn in self.connections:
             conn.stop()
-        # FIX 4: Отменяем все задачи при остановке
+
         for task in self._tasks:
             task.cancel()
         logger.info("🛑 WS Pool stopped")
@@ -177,17 +239,14 @@ class PacificaWSListener:
 
         if len(best_conn.active_subs) >= self.MAX_SUBS:
             new_id = len(self.connections)
-            # FIX 4: используем хелпер
             best_conn = self._create_connection(new_id)
-            # FIX 1: ждём открытия нового сокета перед подпиской
             await best_conn.wait_until_connected()
             logger.info(f"🔄 Scaled WS Pool: Added Connection [{new_id}]")
 
-        # FIX 3: Храним conn_id вместо ссылки на объект
         self.global_sub_counts[sub_id] = {
             "count": 1,
             "params": params,
-            "conn_id": best_conn.conn_id,  # ← было "conn": best_conn
+            "conn_id": best_conn.conn_id,
         }
         best_conn.active_subs[sub_id] = params
         await best_conn.send_subscribe(params)
@@ -208,7 +267,6 @@ class PacificaWSListener:
             info = self.global_sub_counts.pop(sub_id)
             params = info["params"]
 
-            # FIX 3: Ищем коннект по conn_id, а не по сохранённой ссылке
             conn = next((c for c in self.connections if c.conn_id == info["conn_id"]), None)
             if conn:
                 conn.active_subs.pop(sub_id, None)
@@ -238,7 +296,6 @@ class PacificaWSListener:
                     await self._handle_liquidations(liquidations)
 
             elif channel == "book":
-                # FIX 5: явная проверка наличия data, отдельный elif для остальных каналов
                 if "data" in data:
                     payload = {
                         "type": "orderbook_update",
@@ -248,14 +305,33 @@ class PacificaWSListener:
                         "asks": data["data"]["l"][1],
                     }
                     await self.ws_manager.broadcast(payload)
-                # иначе это ack подписки — молча игнорируем
 
-            elif channel not in ("trades", "book"):
-                # FIX 5: явно исключаем оба обработанных канала
+            elif channel == "account_trades":
+                if "data" in data and data["data"]:
+                    await self._handle_master_trades(data["data"])
+
+            elif channel not in ("trades", "book", "account_trades"):
                 await self.ws_manager.broadcast(data)
 
         except Exception as e:
             logger.error(f"Error processing WS message: {e}", exc_info=True)
+
+    async def _handle_master_trades(self, trades_list: list):
+        for trade in trades_list:
+            master_address = trade.get("u")
+            symbol = trade.get("s")
+            side = trade.get("ts")
+            price = float(trade.get("p", 0))
+            master_amount = float(trade.get("a", 0))
+
+            logger.info(f"🚨 СИГНАЛ: Мастер {master_address} сделал {side} по {symbol} за ${price}!")
+
+            if self.executor:
+                asyncio.create_task(
+                    self.executor.process_master_signal(master_address, symbol, side, price, master_amount)
+                )
+            else:
+                logger.error("❌ Экзекутор не подключен к Листенерам!")
 
     async def _handle_liquidations(self, liquidations: list):
         batch_for_front = []
