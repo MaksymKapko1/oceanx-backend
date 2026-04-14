@@ -308,4 +308,59 @@ class PacificaClient:
         logger.error(f"❌ Не удалось получить баланс для {wallet_address[:6]} после {max_retries} попыток.")
         return 0.0
 
+    async def fetch_user_positions(self, wallet_address: str, max_retries: int=3) -> dict:
+        endpoint = f"positions?account={wallet_address}"
+
+        for attempt in range(max_retries):
+            result = await self._fetch(endpoint)
+
+            if isinstance(result, int):
+                logger.warning(f"⏳ Rate limit, ждём {result}с (попытка {attempt + 1})")
+                await asyncio.sleep(result)
+                continue
+
+            if result is None:
+                await asyncio.sleep(1)
+                continue
+
+            raw_positions = result.get('data', [])
+            if not raw_positions:
+                return {}
+
+            positions = {}
+
+            for pos in raw_positions:
+                try:
+                    symbol = pos['symbol']
+                    amount = float(pos['amount'])
+                    entry = float(pos['entry_price'])
+
+                    positions[symbol] = {
+                        "side": pos['side'],  # bid=long, ask=short
+                        "amount": amount,
+                        "entry": entry,
+                        "value": amount * entry,  # USD value позиции
+                        "margin": float(pos.get('margin', 0))
+                         #"margin": "0", // only shown for isolated margin
+                    }
+                except (KeyError, ValueError) as e:
+                    logger.warning(f"⚠️ Не удалось распарсить позицию {pos}: {e}")
+                    continue
+            logger.debug(f"📊 Позиции {wallet_address[:6]}: {list(positions.keys())}")
+            return positions
+        logger.error(f"❌ Не удалось получить позиции для {wallet_address[:6]} после {max_retries} попыток")
+        return {}
+
+
+
+        # positions = await self._fetch(endpoint)
+        #
+        # if positions:
+        #     for position in positions:
+        #         symbol = position['symbol']
+        #         side = position['side']
+        #         amount = position['amount']
+        #         entry_price = position['entry_price']
+        #         margin = position['margin']
+
 pacifica_client = PacificaClient()

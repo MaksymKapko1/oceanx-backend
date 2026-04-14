@@ -83,8 +83,7 @@ async def init_db(pool: asyncpg.Pool):
         CREATE TABLE IF NOT EXISTS user_risk_settings (
         id SERIAL PRIMARY KEY,
         user_id INTEGER UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        margin_allocation_pct INTEGER NOT NULL,
-        max_leverage INTEGER NOT NULL,
+        volume_per_trade_usd NUMERIC(18, 2) NOT NULL DEFAULT 50.00,
         max_slippage NUMERIC(5, 2) NOT NULL,
         max_total_exposure_usd NUMERIC(18, 2) DEFAULT 500.00,
         allowed_markets VARCHAR(20)[] DEFAULT '{}',

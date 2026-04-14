@@ -9,8 +9,9 @@ router = APIRouter(prefix="/api/user", tags=["User"])
 
 class RiskSettingsUser(BaseModel):
     user_wallet:str
-    margin_allocation: float
-    leverage: float
+    volume_per_trade_usd: float
+    # margin_allocation: float
+    # leverage: float
     slippage: float
     allowed_markets: List[str] = []
     max_total_exposure_usd: float = 500.0
@@ -52,8 +53,7 @@ async def save_risk_settings(req: RiskSettingsUser, request: Request):
     query = """
         INSERT INTO user_risk_settings (
                 user_id, 
-                margin_allocation_pct, 
-                max_leverage, 
+                volume_per_trade_usd,
                 max_slippage, 
                 allowed_markets,
                 max_total_exposure_usd,
@@ -61,12 +61,11 @@ async def save_risk_settings(req: RiskSettingsUser, request: Request):
             )
             VALUES (
                 (SELECT id FROM users WHERE wallet_address = $1), 
-                $2, $3, $4, $5, $6, CURRENT_TIMESTAMP 
+                $2, $3, $4, $5, CURRENT_TIMESTAMP 
             )
             ON CONFLICT (user_id) 
             DO UPDATE SET 
-                margin_allocation_pct = EXCLUDED.margin_allocation_pct,
-                max_leverage = EXCLUDED.max_leverage,
+                volume_per_trade_usd = EXCLUDED.volume_per_trade_usd,
                 max_slippage = EXCLUDED.max_slippage,
                 allowed_markets = EXCLUDED.allowed_markets,
                 max_total_exposure_usd = EXCLUDED.max_total_exposure_usd,
@@ -79,8 +78,7 @@ async def save_risk_settings(req: RiskSettingsUser, request: Request):
             result = await conn.fetchval(
                 query,
                 req.user_wallet,
-                req.margin_allocation,
-                req.leverage,
+                req.volume_per_trade_usd,
                 req.slippage,
                 req.allowed_markets,
                 req.max_total_exposure_usd
@@ -100,7 +98,7 @@ async def get_risk_settings(wallet: str, request: Request):
     pool = request.app.state.db_pool
 
     query = """
-        SELECT margin_allocation_pct, max_leverage, max_slippage, allowed_markets, 
+        SELECT volume_per_trade_usd, max_slippage, allowed_markets, 
             COALESCE(max_total_exposure_usd, 500) as max_total_exposure_usd
         FROM user_risk_settings
         WHERE user_id = (SELECT id FROM users WHERE wallet_address = $1)
@@ -114,8 +112,7 @@ async def get_risk_settings(wallet: str, request: Request):
                 return {
                     "success": True,
                     "settings": {
-                        "margin_allocation_pct": row["margin_allocation_pct"],
-                        "max_leverage": row["max_leverage"],
+                        "volume_per_trade_usd": float(row["volume_per_trade_usd"]),
                         "max_slippage": float(row["max_slippage"]),
                         "allowed_markets": row["allowed_markets"] or [],
                         "max_total_exposure_usd": float(row["max_total_exposure_usd"])
