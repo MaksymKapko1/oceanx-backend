@@ -26,6 +26,7 @@ class SaveAgentKeyRequest(BaseModel):
     agent_private_key: str
     signature: str
     timestamp: int
+    expiry_window: int
 
 @router.post("/connect")
 async def connect_user(req: UserConnectReq, request: Request, wallet: str = Depends(get_active_wallet)):
@@ -49,13 +50,23 @@ async def connect_user(req: UserConnectReq, request: Request, wallet: str = Depe
 @router.post("/save-agent")
 async def save_agent_key(req: SaveAgentKeyRequest, request: Request, wallet: str = Depends(get_active_wallet)):
     pacifica_url = "https://api.pacifica.fi/api/v1/agent/bind"
+
+
     payload = {
         "account": wallet,
         "signature": req.signature,
         "timestamp": req.timestamp,
-        "expiry_window": 60000,
+        "expiry_window": req.expiry_window,
         "agent_wallet": req.agent_public_key
     }
+
+    logger.info("============= START BIND =============")
+    logger.info(f"JWT Wallet: {wallet}")
+    logger.info(f"Signature: {req.signature}")
+    logger.info(f"Timestamp: {req.timestamp}")
+    logger.info(f"Payload to Pacifica: {payload}")
+    logger.info("======================================")
+
     agent_public_key = req.agent_public_key
     pool = request.app.state.db_pool
 
