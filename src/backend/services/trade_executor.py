@@ -78,11 +78,11 @@ class CopyTradeExecutor:
             async with self.db_pool.acquire() as conn:
                 followers = await conn.fetch(query, master_wallet)
         except Exception as e:
-            logger.error(f"❌ Ошибка выгрузки подписчиков: {e}")
+            logger.error(f"❌ Subscriber export error: {e}")
             return
 
         if not followers:
-            logger.info(f"ℹ️ У мастера {master_wallet} нет активных подписчиков.")
+            logger.info(f"ℹ️ The {master_wallet} wallet has no active subscribers.")
             return
 
         tasks = []
@@ -123,7 +123,7 @@ class CopyTradeExecutor:
                     "close_long": "close_short", "close_short": "close_long"
                 }
                 side = reverse_map.get(side, side)
-                logger.info(f"🔄 РЕВЕРС: сделка перевёрнута на {side}")
+                logger.info(f"🔄 REVERSE: The transaction has been reversed to {side}")
 
             wallet = follower['user_wallet']
             max_limit = float(follower.get('max_total_exposure_usd', 500))
@@ -138,21 +138,21 @@ class CopyTradeExecutor:
                 current_exposure = sum(p['value'] for p in real_positions.values())
                 market_info = pacifica_client.cache.get('market_info', {}).get(symbol)
                 if not market_info:
-                    logger.warning(f"⚠️ Нет данных по рынку {symbol}")
+                    logger.warning(f"⚠️ No market data available {symbol}")
                     return
 
                 allowed_markets = follower.get('allowed_markets')
                 if allowed_markets and len(allowed_markets) > 0:
                     if symbol not in allowed_markets and not is_reduce_only:
-                        logger.info(f"🚫 {symbol} не в белом списке для {wallet[:6]}")
+                        logger.info(f"🚫 {symbol} not on the whitelist for {wallet[:6]}")
                         return
 
-                logger.info(f"🔍 [STEP 1] Получение позиций ЮЗЕРА {wallet[:6]} через REST...")
+                logger.info(f"🔍 [STEP 1] Retrieving the {wallet[:6]} user's positions via REST...")
                 real_positions = await pacifica_client.fetch_user_positions(wallet)
-                logger.info(f"📊 Позиции юзера получены. Всего открыто: {len(real_positions)} инструментов.")
+                logger.info(f"📊 The user's positions have been retrieved. A total of {len(real_positions)} instruments are open.")
 
                 if is_reduce_only:
-                    logger.info(f"📉 [STEP 2] Сигнал на ЗАКРЫТИЕ {symbol}. Вызываем расчет Ratio...")
+                    logger.info(f"📉 [STEP 2] CLOSE signal {symbol}. Calculating the Ratio...")
                     result = await self._calc_close_amount(
                         sub_id, symbol, master_amount, wallet, real_positions, master_wallet
                     )
@@ -173,7 +173,7 @@ class CopyTradeExecutor:
                 min_notional = 10.1
                 current_val = formatted_size * price
                 logger.info(
-                    f"🚀 [STEP 3] Итоговый расчет: {side} {formatted_size} {symbol} (~${current_val:.2f}) | Ratio: {close_ratio:.4f}")
+                    f"🚀 [STEP 3] Final calculation: {side} {formatted_size} {symbol} (~${current_val:.2f}) | Ratio: {close_ratio:.4f}")
 
                 if not is_reduce_only and current_val < min_notional:
                     bumped_steps = math.ceil(min_notional / price / lot_size)
@@ -181,15 +181,15 @@ class CopyTradeExecutor:
                     bumped_val = bumped_size * price
 
                     if current_exposure + bumped_val > max_limit:
-                        logger.warning(f"🚫 Отмена: дотяжка до минималки (${bumped_val:.2f}) пробьет лимит юзера!")
+                        logger.warning(f"🚫 Reversal: top-up to the minimum wage (${bumped_val:.2f}) will exceed the user's limit!")
                         return
 
                     formatted_size = bumped_size
                     current_val = bumped_val
-                    logger.info(f"⬆️ Сумма сделки < $10. Добили до {formatted_size} (${formatted_size * price:.2f}$)")
+                    logger.info(f"⬆️ Transaction amount < $10. Finalized at {formatted_size} (${formatted_size * price:.2f}$)")
 
                 if formatted_size <= 0:
-                    logger.warning(f"⚠️ Размер лота слишком мал ({formatted_size}). Пропуск.")
+                    logger.warning(f"⚠️ The lot size is too small ({formatted_size}). Skipping.")
                     return
 
                 amount_str = f"{formatted_size:f}".rstrip('0').rstrip('.')
@@ -204,7 +204,7 @@ class CopyTradeExecutor:
                     close_ratio=close_ratio
                 )
             except Exception:
-                logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА для {wallet[:6]}", exc_info=True)
+                logger.error(f"❌ CRITICAL ERROR for  {wallet[:6]}", exc_info=True)
 # ─────────────────────────────────────────────
 # БЛОК 5: ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ РАСЧЁТОВ
 # ─────────────────────────────────────────────
@@ -221,10 +221,10 @@ class CopyTradeExecutor:
         m_remaining = float(m_pos['amount']) if m_pos else 0.0
         total_m_before = master_amount + m_remaining
 
-        logger.info(f"📈 Данные МАСТЕРА: закрыл {master_amount}, осталось {m_remaining}. (Всего было: {total_m_before})")
+        logger.info(f"📈 MASTER data: {master_amount} has been closed; {m_remaining} remains. (Total amount before: {total_m_before})")
 
         if total_m_before <= 0:
-            logger.warning(f"⚠️ Невозможно рассчитать Ratio: общий объем мастера <= 0")
+            logger.warning(f"⚠️ Unable to calculate the ratio: total volume of the master <= 0")
             return None
 
         # 2. Высчитываем Ratio
@@ -233,20 +233,20 @@ class CopyTradeExecutor:
         # ✅ ПРАВИЛО 95% = 100% (Self-Healing)
         if close_ratio > 0.9:
             close_ratio = 1.0
-            logger.info(f"🎯 Ratio {close_ratio:.4f} > 0.9. Принудительное закрытие в 100% (Full Close).")
+            logger.info(f"🎯 Ratio {close_ratio:.4f} > 0.9. 100% forced close (Full Close).")
         else:
-            logger.info(f"📊 Рассчитанный Ratio: {close_ratio:.4f} ({close_ratio * 100:.1f}%)")
+            logger.info(f"📊 Calculated Ratio: {close_ratio:.4f} ({close_ratio * 100:.1f}%)")
 
         # 3. Применяем к юзеру
         u_pos = real_positions.get(symbol)
         if not u_pos:
-            logger.warning(f"⚠️ У юзера нет активной позы {symbol} на бирже. Синхронизируем БД...")
+            logger.warning(f"⚠️ The user does not have an active position {symbol} on the exchange. Synchronizing the database...")
             await self.db_pool.execute(
                 "UPDATE copied_trades SET status = 'closed' WHERE subscription_id = $1 AND symbol = $2", sub_id, symbol)
             return None
 
         raw_amount = u_pos['amount'] * close_ratio
-        logger.info(f"📐 Юзер держит {u_pos['amount']}. К закрытию: {raw_amount:.8f} (на основе Ratio)")
+        logger.info(f"📐 The user holds {u_pos['amount']}. At close:  {raw_amount:.8f} (based on Ratio)")
 
         # ID из базы для последующего апдейта
         agg = await self.db_pool.fetchrow(
@@ -308,13 +308,13 @@ class CopyTradeExecutor:
 
         # Жёсткий стоп — exposure уже на лимите
         if current_exposure >= max_limit:
-            logger.warning(f"🚫 ЛИМИТ ИСЧЕРПАН: ${current_exposure:.2f} >= ${max_limit:.2f}")
+            logger.warning(f"🚫 LIMIT REACHED: ${current_exposure:.2f} >= ${max_limit:.2f}")
             return None
 
         available_usd = max_limit - current_exposure
         if available_usd < min_notional:
             logger.warning(
-                f"⚠️ Остаток лимита (${available_usd:.2f}) меньше минимальной сделки (${min_notional}). Пропуск.")
+                f"⚠️ The remaining limit (${available_usd:.2f}) is less than the minimum trade size (${min_notional}). Skipping.")
             return None
 
         real_pos = real_positions.get(symbol)
@@ -333,7 +333,7 @@ class CopyTradeExecutor:
             raw_amount = float(follower['volume_per_trade_usd']) / price
 
         if (raw_amount * price) > available_usd:
-            logger.info(f"✂️ Сделка режется с ${raw_amount * price:.2f} до остатка лимита ${available_usd:.2f}")
+            logger.info(f"✂️ The trade is executed from ${raw_amount * price:.2f} down to the remaining limit of ${available_usd:.2f}")
             raw_amount = available_usd / price
 
         new_value = raw_amount * price
@@ -400,22 +400,22 @@ class CopyTradeExecutor:
                     response = json.loads(await asyncio.wait_for(websocket.recv(), timeout=5.0))
                     break
             except Exception as e:
-                logger.warning(f"⚠️ WS попытка {attempt + 1}/{max_ws_retries} не удалась для {wallet[:6]}: {e}")
+                logger.warning(f"⚠️ WS attempt {attempt + 1}/{max_ws_retries} failed for {wallet[:6]}: {e}")
                 if attempt == max_ws_retries - 1:
-                    logger.error(f"❌ WS окончательно упал для {wallet[:6]}. Сделка не отправлена.")
+                    logger.error(f"❌ The WS has finally dropped for {wallet[:6]}. The transaction was not sent.")
                     return  # Прерываем выполнение
                 await asyncio.sleep(0.5)  # Пауза перед ретраем
         if not response: return
 
         if response.get("code") == 200:
-            logger.info(f"✅ УСПЕХ: {wallet[:6]} {side} {amount_str} {symbol}")
+            logger.info(f"✅ Success: {wallet[:6]} {side} {amount_str} {symbol}")
             await self._handle_success(
                 is_reduce_only, close_ratio, trade_record_ids,
                 sub_id, client_order_id, symbol, api_side, formatted_size, price, master_amount
             )
         else:
             err_msg = response.get('err', '')
-            logger.error(f"❌ ОШИБКА БИРЖИ для {wallet[:6]}: {err_msg}")
+            logger.error(f"❌ EXCHANGE ERROR for {wallet[:6]}: {err_msg}")
             # Самовосстановление: биржа говорит что позиции нет — закрываем в БД
             if is_reduce_only and trade_record_ids and (
                     response.get("code") == 420 or "No position" in err_msg):
@@ -462,4 +462,4 @@ class CopyTradeExecutor:
             async with self.db_pool.acquire() as conn:
                 await conn.execute(query, sub_id, order_id, symbol, side, size, price, master_size)
         except Exception as e:
-            logger.error(f"❌ Не удалось записать сделку в лог: {e}")
+            logger.error(f"❌ Failed to log the transaction: {e}")

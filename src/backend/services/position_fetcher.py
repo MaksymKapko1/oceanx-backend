@@ -9,14 +9,11 @@ from services.pacifica_client import pacifica_client
 
 logger = logging.getLogger(__name__)
 
-# УМНЫЙ КЭШ ПОЗИЦИЙ
-# Структура: {"address": {"timestamp": 12345678, "data": [список позиций]}}
 POSITIONS_CACHE = {}
-CACHE_TTL = 60  # Скачиваем позиции с биржи не чаще 1 раза в 60 секунд!
+CACHE_TTL = 60
 
 
 async def fetch_raw_positions_from_ws(account_address: str) -> list:
-    """Функция, которая реально ходит в WebSocket (тяжелая)"""
     ws_uri = "wss://ws.pacifica.fi/ws"
     api_key = os.getenv("PACIFICA_API_KEY")
     headers = {"PF-API-KEY": api_key} if api_key else {}
@@ -35,9 +32,9 @@ async def fetch_raw_positions_from_ws(account_address: str) -> list:
                 if data.get('channel') == 'account_positions':
                     return data.get('data', [])
     except asyncio.TimeoutError:
-        logger.warning(f"⏳ Таймаут получения позиций (WS) для {account_address}")
+        logger.warning(f"⏳ Position acquisition timeout (WS) for {account_address}")
     except Exception as e:
-        logger.error(f"❌ Ошибка WS снапшота для {account_address}: {e}")
+        logger.error(f"❌ WS snapshot error for {account_address}: {e}")
 
     return []
 

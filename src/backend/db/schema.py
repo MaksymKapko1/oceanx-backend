@@ -115,6 +115,6 @@ async def init_db(pool: asyncpg.Pool):
             for q_idx in queries_indexes:
                 await conn.execute(q_idx)
 
-        logger.info("✅ База данных (liqs, volume, users, subs, copied_trades, agents, risk table) и индексы успешно инициализированы")
+        logger.info("✅ The database (liqs, volume, users, subs, copied_trades, agents, risk table) and indexes have been successfully initialized")
     except Exception as e:
         logger.error(f"❌ Критическая ошибка при инициализации БД: {e}")

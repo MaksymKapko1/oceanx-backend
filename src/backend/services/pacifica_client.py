@@ -83,19 +83,19 @@ class PacificaClient:
             id="daily_volume_sync"
         )
         self.scheduler.start()
-        logger.info("⏰ Планировщик запущен: обновление объемов каждый день в 00:05 UTC")
+        logger.info("⏰ The scheduler is running: volumes are updated daily at 00:05 UTC")
 
         while True:
             try:
                 await self.fetch_pnl_leaderboard()
                 await self.fetch_daily_volume()
             except Exception as e:
-                logger.error(f"🔥 ОШИБКА В ФОНОВОМ ЦИКЛЕ (но мы живем дальше): {e}", exc_info=True)
+                logger.error(f"🔥 ERROR IN THE BACKGROUND LOOP (but life goes on): {e}", exc_info=True)
             await asyncio.sleep(self.refresh_interval)
 
     async def _fetch(self, endpoint: str) -> dict | None | int:
         if self.session is None or self.session.closed:
-            logger.warning("⚠️ Сессия закрыта, пересоздаём...")
+            logger.warning("⚠️ The session has been closed; let's recreate it...")
             await self.start()
 
         try:
@@ -224,7 +224,7 @@ class PacificaClient:
         return total_volume, total_open_interest_usd
 
     async def fetch_historical_volume_full(self):
-        logger.info("🔄 Запуск полного исторического сбора объемов...")
+        logger.info("🔄 Launching a full historical volume collection...")
 
         markets = self.cache.get('markets', [])
         if not markets:

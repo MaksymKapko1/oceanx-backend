@@ -159,7 +159,7 @@ class PacificaWSListener:
         if master_address not in self.active_masters:
             await self.subscribe({"source": "account_trades", "account": master_address})
             self.active_masters.add(master_address)
-            logger.info(f"⚡ МОМЕНТАЛЬНАЯ подписка на мастера: {master_address}")
+            logger.info(f"⚡ Instant subscription to the master: {master_address}")
 
     async def remove_master_instantly(self, master_address: str):
         if master_address not in self.active_masters:
@@ -183,13 +183,13 @@ class PacificaWSListener:
 
                 self.active_masters.remove(master_address)
 
-                logger.info(f"🗑️ WebSocket связь разорвана: на мастера {master_address} больше нет подписчиков.")
+                logger.info(f"🗑️ The WebSocket connection has been terminated: there are no longer any subscribers on the master {master_address}.")
             else:
                 logger.info(
-                    f"ℹ️ Связь сохранена: за мастером {master_address} всё еще следят {active_followers_count} чел.")
+                    f"ℹ️ Connection maintained: {master_address} still has {active_followers_count} followers.")
 
         except Exception as e:
-            logger.error(f"Ошибка при попытке отписки от мастера {master_address}: {e}")
+            logger.error(f"Error while trying to unsubscribe from {master_address}: {e}")
 
     async def _sync_masters_loop(self):
         while self._is_running:
@@ -207,16 +207,16 @@ class PacificaWSListener:
                 for master in to_add:
                     await self.subscribe({"source": "account_trades", "account": master})
                     self.active_masters.add(master)
-                    logger.info(f"🎯 Начали следить за новым мастером: {master}")
+                    logger.info(f"🎯 We've started following a new master: {master}")
 
                 to_remove = self.active_masters - db_masters
                 for master in to_remove:
                     sub_trades = self._generate_sub_id({"source": "account_trades", "account": master})
                     await self.unsubscribe(sub_trades)
                     self.active_masters.remove(master)
-                    logger.info(f"🛑 Прекратили следить за мастером: {master}")
+                    logger.info(f"🛑 You are no longer following the master: {master}")
             except Exception as e:
-                logger.error(f"Ошибка синхронизации мастеров: {e}")
+                logger.error(f"Master synchronization error: {e}")
             await asyncio.sleep(20)
 
     def stop(self):
@@ -324,14 +324,14 @@ class PacificaWSListener:
             price = float(trade.get("p", 0))
             master_amount = float(trade.get("a", 0))
 
-            logger.info(f"🚨 СИГНАЛ: Мастер {master_address} сделал {side} по {symbol} за ${price}!")
+            logger.info(f"🚨 ALERT: Trader {master_address} placed a {side} order for {symbol} at ${price}!")
 
             if self.executor:
                 asyncio.create_task(
                     self.executor.process_master_signal(master_address, symbol, side, price, master_amount)
                 )
             else:
-                logger.error("❌ Экзекутор не подключен к Листенерам!")
+                logger.error("❌ The Executioner is not connected to the Listeners!")
 
     async def _handle_liquidations(self, liquidations: list):
         batch_for_front = []
