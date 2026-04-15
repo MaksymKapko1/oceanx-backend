@@ -34,36 +34,12 @@ class CopyTradeExecutor:
         self.db_pool = db_pool
         self.subscription_locks = {}
         self.rate_limit = asyncio.Semaphore(20)
-        self.balances_cache = {}
 
         encryption_key = os.getenv("MASTER_KEY")
         if encryption_key:
             self.fernet = Fernet(encryption_key.encode())
         else:
             logger.error("КРИТИЧЕСКИ: MASTER_KEY не найден в .env!")
-
-    async def start_background_tasks(self):
-        asyncio.create_task(self._sync_balances_loop())
-
-    async def _sync_balances_loop(self):
-        """Фоновая синхронизация балансов всех активных подписчиков."""
-        logger.info("🔄 Фоновая синхронизация балансов запущена...")
-        while True:
-            try:
-                async with self.db_pool.acquire() as conn:
-                    users = await conn.fetch("""
-                        SELECT DISTINCT u.wallet_address 
-                        FROM subscriptions s 
-                        JOIN users u ON s.user_id = u.id 
-                        WHERE s.is_active = TRUE
-                    """)
-                for row in users:
-                    wallet = row['wallet_address']
-                    self.balances_cache[wallet] = await pacifica_client.fetch_user_balance(wallet)
-                    await asyncio.sleep(2)
-            except Exception as e:
-                logger.error(f"❌ Ошибка синхронизации балансов: {e}")
-            await asyncio.sleep(40)
 
     def _decrypt_key(self, encrypted_key: str) -> str:
         return self.fernet.decrypt(encrypted_key.encode()).decode()
@@ -150,6 +126,7 @@ class CopyTradeExecutor:
                 logger.info(f"🔄 РЕВЕРС: сделка перевёрнута на {side}")
 
             wallet = follower['user_wallet']
+            max_limit = float(follower.get('max_total_exposure_usd', 500))
             sub_id = follower['subscription_id']
             is_reduce_only = side.startswith("close")
 
@@ -157,6 +134,8 @@ class CopyTradeExecutor:
             close_ratio = 1.0
 
             try:
+                real_positions = await pacifica_client.fetch_user_positions(wallet)
+                current_exposure = sum(p['value'] for p in real_positions.values())
                 market_info = pacifica_client.cache.get('market_info', {}).get(symbol)
                 if not market_info:
                     logger.warning(f"⚠️ Нет данных по рынку {symbol}")
@@ -197,9 +176,17 @@ class CopyTradeExecutor:
                     f"🚀 [STEP 3] Итоговый расчет: {side} {formatted_size} {symbol} (~${current_val:.2f}) | Ratio: {close_ratio:.4f}")
 
                 if not is_reduce_only and current_val < min_notional:
-                    steps = math.ceil(min_notional / price / lot_size)
-                    formatted_size = round(steps * lot_size, 8)
-                    logger.info(f"⬆️ Сумма сделки < $10. Добили до {formatted_size} ({formatted_size * price:.2f}$)")
+                    bumped_steps = math.ceil(min_notional / price / lot_size)
+                    bumped_size = round(bumped_steps * lot_size, 8)
+                    bumped_val = bumped_size * price
+
+                    if current_exposure + bumped_val > max_limit:
+                        logger.warning(f"🚫 Отмена: дотяжка до минималки (${bumped_val:.2f}) пробьет лимит юзера!")
+                        return
+
+                    formatted_size = bumped_size
+                    current_val = bumped_val
+                    logger.info(f"⬆️ Сумма сделки < $10. Добили до {formatted_size} (${formatted_size * price:.2f}$)")
 
                 if formatted_size <= 0:
                     logger.warning(f"⚠️ Размер лота слишком мал ({formatted_size}). Пропуск.")
@@ -311,6 +298,7 @@ class CopyTradeExecutor:
         """
         wallet = follower['user_wallet']
         max_limit = float(follower.get('max_total_exposure_usd', 500))
+        min_notional = 10.1
         volume_per_trade = float(follower['volume_per_trade_usd'])
 
         # real_positions = await pacifica_client.fetch_user_positions(wallet)
@@ -321,6 +309,12 @@ class CopyTradeExecutor:
         # Жёсткий стоп — exposure уже на лимите
         if current_exposure >= max_limit:
             logger.warning(f"🚫 ЛИМИТ ИСЧЕРПАН: ${current_exposure:.2f} >= ${max_limit:.2f}")
+            return None
+
+        available_usd = max_limit - current_exposure
+        if available_usd < min_notional:
+            logger.warning(
+                f"⚠️ Остаток лимита (${available_usd:.2f}) меньше минимальной сделки (${min_notional}). Пропуск.")
             return None
 
         real_pos = real_positions.get(symbol)
@@ -337,6 +331,10 @@ class CopyTradeExecutor:
             raw_amount = real_pos['amount'] * add_ratio
         else:
             raw_amount = float(follower['volume_per_trade_usd']) / price
+
+        if (raw_amount * price) > available_usd:
+            logger.info(f"✂️ Сделка режется с ${raw_amount * price:.2f} до остатка лимита ${available_usd:.2f}")
+            raw_amount = available_usd / price
 
         new_value = raw_amount * price
         if current_exposure + new_value > max_limit:
