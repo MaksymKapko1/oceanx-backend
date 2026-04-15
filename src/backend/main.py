@@ -58,7 +58,6 @@ async def lifespan(app: FastAPI):
     await init_db(db_pool)
 
     executor = CopyTradeExecutor(db_pool)
-    await executor.start_background_tasks()
     app.state.executor = executor
 
     ws_listener = PacificaWSListener(
