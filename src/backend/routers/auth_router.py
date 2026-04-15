@@ -53,7 +53,7 @@ async def save_agent_key(req: SaveAgentKeyRequest, request: Request, wallet: str
         "account": wallet,
         "signature": req.signature,
         "timestamp": req.timestamp,
-        "expiry_window": 5000,
+        "expiry_window": 60000,
         "agent_wallet": req.agent_public_key
     }
     agent_public_key = req.agent_public_key

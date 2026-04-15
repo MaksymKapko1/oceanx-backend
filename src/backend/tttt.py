@@ -18,7 +18,7 @@ def main():
     timestamp = int(time.time() * 1000)
     header = {
         "timestamp": timestamp,
-        "expiry_window": 5000,
+        "expiry_window": 60000,
         "type": "create_api_key",
     }
     payload = {}
