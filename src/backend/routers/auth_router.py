@@ -6,6 +6,11 @@ from solders.keypair import Keypair
 
 from core.security import crypto_manager
 
+from fastapi import Depends
+
+from core.dependencies import verify_privy_token
+from core.dependencies import get_active_wallet
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
@@ -14,19 +19,16 @@ router = APIRouter(
 )
 
 class UserConnectReq(BaseModel):
-    wallet_address: str
+    pass
 
 class SaveAgentKeyRequest(BaseModel):
-    user_wallet: str
     agent_public_key: str
     agent_private_key: str
     signature: str
     timestamp: int
 
 @router.post("/connect")
-async def connect_user(req: UserConnectReq, request: Request):
-    wallet = req.wallet_address
-
+async def connect_user(req: UserConnectReq, request: Request, wallet: str = Depends(get_active_wallet)):
     pool = request.app.state.db_pool
     query = """
         INSERT INTO users (wallet_address)
@@ -45,16 +47,15 @@ async def connect_user(req: UserConnectReq, request: Request):
         return {"success": False, "error": str(e)}
 
 @router.post("/save-agent")
-async def save_agent_key(req: SaveAgentKeyRequest, request: Request):
+async def save_agent_key(req: SaveAgentKeyRequest, request: Request, wallet: str = Depends(get_active_wallet)):
     pacifica_url = "https://api.pacifica.fi/api/v1/agent/bind"
     payload = {
-        "account": req.user_wallet,
+        "account": wallet,
         "signature": req.signature,
         "timestamp": req.timestamp,
         "expiry_window": 5000,
         "agent_wallet": req.agent_public_key
     }
-    wallet = req.user_wallet
     agent_public_key = req.agent_public_key
     pool = request.app.state.db_pool
 

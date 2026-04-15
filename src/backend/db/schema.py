@@ -29,6 +29,7 @@ async def init_db(pool: asyncpg.Pool):
     CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         wallet_address VARCHAR(256) UNIQUE NOT NULL,
+        builder_approved BOOLEAN DEFAULT FALSE,
         pacifica_api_key VARCHAR(256),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );

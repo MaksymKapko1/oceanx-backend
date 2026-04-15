@@ -83,6 +83,7 @@ class CopyTradeExecutor:
                        s.id AS subscription_id,
                        s.is_reverse,
                        u.wallet_address AS user_wallet,
+                       u.builder_approved,
                        r.volume_per_trade_usd,
                        r.max_total_exposure_usd,
                        r.max_slippage,
@@ -369,8 +370,11 @@ class CopyTradeExecutor:
             "amount": amount_str,
             "side": api_side,
             "slippage_percent": str(follower['max_slippage']),
-            "client_order_id": client_order_id
+            "client_order_id": client_order_id,
         }
+
+        if follower.get('builder_approved'):
+            signature_payload["builder_code"] = "redwingss"
         _, signature = sign_message(
             {"timestamp": timestamp, "expiry_window": 5000, "type": "create_market_order"},
             signature_payload,

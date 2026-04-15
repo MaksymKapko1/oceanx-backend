@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocket
 from dotenv import load_dotenv
 
+from services.manual_trade_service import ManualTradeService
 from services.trade_executor import CopyTradeExecutor
 
 load_dotenv()
@@ -21,6 +22,7 @@ from routers.overview import router as stats_router
 from routers.auth_router import router as auth_router
 from routers import copy_router
 from routers.user_settings_router import router as settings_router
+from routers.manual_trades_router import router as manual_trades_router
 from db.schema import init_db
 from core.connection_manager import ws_manager
 from services.pacifica_ws import PacificaWSListener
@@ -113,6 +115,7 @@ app.include_router(stats_router)
 app.include_router(auth_router)
 app.include_router(copy_router.router)
 app.include_router(settings_router)
+app.include_router(manual_trades_router)
 
 @app.get("/")
 async def root():

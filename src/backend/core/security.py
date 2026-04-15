@@ -3,8 +3,21 @@ import logging
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 
+from fastapi import HTTPException
+
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+
+def ensure_owner(requested_wallet: str, token_data: dict):
+    verified_wallets = token_data.get("verified_wallets", [])
+
+    if requested_wallet not in verified_wallets:
+        print(f"🚨 SECURITY ALERT: User {token_data.get('sub')} tried to access wallet {requested_wallet}")
+        raise HTTPException(
+            status_code=403,
+            detail="Ownership verification failed. This wallet is not linked to your account."
+        )
 
 class EncryptionManager:
     def __init__(self):
