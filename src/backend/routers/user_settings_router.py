@@ -1,7 +1,6 @@
 from typing import List
 from fastapi import Depends
 
-from core.dependencies import verify_privy_token
 from core.dependencies import get_active_wallet
 
 from fastapi import APIRouter, Request, HTTPException
@@ -13,8 +12,6 @@ router = APIRouter(prefix="/api/user", tags=["User"])
 
 class RiskSettingsUser(BaseModel):
     volume_per_trade_usd: float
-    # margin_allocation: float
-    # leverage: float
     slippage: float
     allowed_markets: List[str] = []
     max_total_exposure_usd: float = 500.0
@@ -45,10 +42,10 @@ async def update_strategy(req: UpdateStrategyRequest, request: Request, wallet: 
                 raise HTTPException(status_code=404, detail="Subscription not found")
 
             logger.info(
-                f"🔄 Стратегия изменена для {wallet[:6]} -> {req.master_wallet[:6]}: Reverse={req.is_reverse}")
+                f"🔄 The strategy has been changed for {wallet[:6]} -> {req.master_wallet[:6]}: Reverse={req.is_reverse}")
             return {"success": True, "is_reverse": row['is_reverse']}
     except Exception as e:
-        logger.error(f"Ошибка смены стратегии: {e}")
+        logger.error(f"The mistake of changing strategy: {e}")
         return {"success": False, "error": str(e)}
 
 @router.post("/settings")
@@ -94,7 +91,7 @@ async def save_risk_settings(req: RiskSettingsUser, request: Request,wallet: str
 
         return {"success": True, "message": "Risk settings saved successfully"}
     except Exception as e:
-        logger.error(f"❌ Ошибка сохранения настроек для {wallet}: {e}")
+        logger.error(f"❌ Error saving settings for {wallet}: {e}")
         return {"success": False, "error": str(e)}
 
 
@@ -127,7 +124,7 @@ async def get_risk_settings(wallet: str, request: Request):
             return {"success": True, "settings": {}}
 
     except Exception as e:
-        logger.error(f"❌ Ошибка выгрузки настроек для {wallet}: {e}")
+        logger.error(f"❌ Error unloading settings for {wallet}: {e}")
         return {"success": False, "error": str(e)}
 
 
@@ -136,7 +133,6 @@ async def update_builder_status(req: BuilderStatusUpdate, request: Request,
                                 wallet: str = Depends(get_active_wallet)):
     db_pool = request.app.state.db_pool
 
-    # Обновляем статус в базе
     async with db_pool.acquire() as conn:
         await conn.execute("""
             UPDATE users 

@@ -116,7 +116,6 @@ class PacificaWSListener:
         parts = [f"{k}={v}" for k, v in sorted(params.items())]
         return "_".join(parts)
 
-    # FIX 4: Хелпер для создания соединения с сохранением task
     def _create_connection(self, conn_id: int) -> PacificaWSConnection:
         conn = PacificaWSConnection(self.ws_uri, self.extra_headers, conn_id, self)
         self.connections.append(conn)
@@ -200,7 +199,6 @@ class PacificaWSListener:
             try:
                 async with self.db_pool.acquire() as conn:
                     rows = await conn.fetch("SELECT DISTINCT master_wallet FROM subscriptions WHERE is_active = TRUE")
-                    #TODO
                     db_masters = set(row['master_wallet'] for row in rows)
 
                 to_add = db_masters - self.active_masters

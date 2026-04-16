@@ -37,10 +37,10 @@ class PacificaClient:
 
         if self.api_keys:
             self.key_rotator = itertools.cycle(self.api_keys)
-            logger.info(f"🔑 Ротатор заряжен: {len(self.api_keys)} ключей в пуле.")
+            logger.info(f"🔑 The rotator is good: {len(self.api_keys)} keys in the pool.")
         else:
             self.key_rotator = None
-            logger.warning("⚠️ PACIFICA_API_KEYS не найдены! Работаем без ключей (жесткие лимиты).")
+            logger.warning("⚠️ PACIFICA_API_KEYS not found! Operating without keys (strict limits).")
         self.scheduler = AsyncIOScheduler(timezone="UTC")
 
     def _get_headers(self):
@@ -105,7 +105,7 @@ class PacificaClient:
                 if rl_header:
                     parts = {p.split('=')[0]: p.split('=')[1] for p in rl_header.split(';') if '=' in p}
                     remaining = float(parts.get('r', 0)) / 10
-                    refresh_in = int(float(parts.get('t', 0)))# Делим на 10, как просят в доках1
+                    refresh_in = int(float(parts.get('t', 0)))
 
                     if remaining < 50:
                         logger.warning(
@@ -115,14 +115,14 @@ class PacificaClient:
 
                 if response.status == 429:
                     wait_time = refresh_in if refresh_in > 0 else 60
-                    logger.warning(f"🛑 RATE LIMIT HIT! Биржа просит подождать {wait_time} секунд.")
+                    logger.warning(f"🛑 RATE LIMIT HIT! The exchange asks to wait {wait_time} seconds.")
                     return wait_time
                 logger.warning(f"⚠️ {endpoint} → HTTP {response.status}")
                 return None
         except aiohttp.ClientConnectionError:
-            logger.error(f"❌ Нет соединения: {endpoint}")
+            logger.error(f"❌ No connection: {endpoint}")
         except aiohttp.ServerTimeoutError:
-            logger.error(f"⏳ Таймаут: {endpoint}")
+            logger.error(f"⏳ Timeout: {endpoint}")
         except Exception as e:
             logger.error(f"❌ Fetch error {endpoint}: {e}")
         return None
@@ -145,7 +145,7 @@ class PacificaClient:
         clean_data.sort(key=lambda x: float(x.get('pnl_1d') or 0), reverse=True)
 
         self.cache['pnl_1d_leaderboard'] = clean_data
-        # logger.info(f"✅ Leaderboard загружен: {len(sorted_leaderboard)} трейдеров, сортировка по {sort_field}")
+        # logger.info(f"✅ Leaderboard is loaded: {len(sorted_leaderboard)} traders, sort by {sort_field}")
         return clean_data
 
     async def fetch_markets(self) -> list[str]:
@@ -229,32 +229,29 @@ class PacificaClient:
         markets = self.cache.get('markets', [])
         if not markets:
             markets = await self.fetch_markets()
-
-        # Начало истории Pacifica
         start_time = 1749427200000
         end_time = int(time.time() * 1000)
 
         await self._collect_and_save_volume(markets, start_time, end_time)
-        logger.info("✅ Полный исторический сбор завершён")
+        logger.info("✅ The complete historical collection is now complete")
 
     async def fetch_historical_volume_incremental(self):
-        """Инкрементальный сбор: только последние 2 дня (с запасом на таймзоны).
-        Запускается ежедневно в 00:05 UTC."""
-        logger.info("📅 Инкрементальный сбор: последние 2 дня...")
+        """Incremental collection: only the last 2 days (with a buffer for time zones).
+        Runs daily at 00:05 UTC."""
+        logger.info("📅 Incremental fundraising: the last 2 days...")
 
         markets = self.cache.get('markets', [])
         if not markets:
             markets = await self.fetch_markets()
 
-        # Берём 2 дня назад с запасом, чтобы не пропустить свечу
         two_days_ago = int(time.time() * 1000) - (2 * 24 * 60 * 60 * 1000)
         end_time = int(time.time() * 1000)
 
         await self._collect_and_save_volume(markets, two_days_ago, end_time)
-        logger.info("✅ Инкрементальный сбор завершён")
+        logger.info("✅ The incremental collection is complete")
 
     async def _collect_and_save_volume(self, markets: list, start_time: int, end_time: int):
-        """Общая логика: собрать свечи по всем тикерам и записать в БД."""
+        """General approach: Collect candlestick data for all tickers and store it in the database."""
         daily_totals = {}
 
         for ticker in markets:
@@ -262,7 +259,7 @@ class PacificaClient:
                 f"kline?symbol={ticker}&interval=1d&start_time={start_time}&end_time={end_time}"
             )
             if not response or 'data' not in response:
-                logger.warning(f"⚠️ Нет данных для {ticker}, пропускаем")
+                logger.warning(f"⚠️ No data available for {ticker}; skipping")
                 continue
 
             for candle in response.get('data', []):
@@ -273,17 +270,16 @@ class PacificaClient:
 
                 daily_totals[t] = daily_totals.get(t, 0) + volume_usd
 
-            # logger.info(f"📈 Обработан {ticker}")
             await asyncio.sleep(4)
 
         if not self.pool:
-            logger.error("❌ pool не задан, запись в БД невозможна")
+            logger.error("❌ The pool is not specified; the database cannot be written to")
             return
 
         for t, vol in daily_totals.items():
             await insert_daily_volume(self.pool, t, vol)
 
-        logger.info(f"💾 Записано {len(daily_totals)} дней в БД")
+        logger.info(f"💾 {len(daily_totals)} days have been recorded in the database")
 
 
     async def fetch_user_balance(self, wallet_address: str, max_retries=3) -> float:
@@ -292,20 +288,19 @@ class PacificaClient:
         for attempt in range(max_retries):
             result = await self._fetch(endpoint)
 
-            # Если получили словарь (успех)
             if isinstance(result, dict) and "data" in result:
                 return float(result["data"].get("available_to_spend", 0))
 
             if isinstance(result, int):
                 wait_time = result
-                logger.info(f"⏳ Спим {wait_time}с из-за лимитов перед попыткой {attempt + 2}...")
+                logger.info(f"⏳ We'll wait {wait_time} seconds due to the limits before attempting {attempt + 2}...")
                 await asyncio.sleep(wait_time)
                 continue
 
             if result is None:
                 await asyncio.sleep(1)
 
-        logger.error(f"❌ Не удалось получить баланс для {wallet_address[:6]} после {max_retries} попыток.")
+        logger.error(f"❌ Unable to retrieve the balance for {wallet_address[:6]} after {max_retries} attempts.")
         return 0.0
 
     async def fetch_user_positions(self, wallet_address: str, max_retries: int=3) -> dict:
@@ -315,7 +310,7 @@ class PacificaClient:
             result = await self._fetch(endpoint)
 
             if isinstance(result, int):
-                logger.warning(f"⏳ Rate limit, ждём {result}с (попытка {attempt + 1})")
+                logger.warning(f"⏳ Rate limit, waiting for {result} for ({attempt + 1} attempts)")
                 await asyncio.sleep(result)
                 continue
 
@@ -339,28 +334,16 @@ class PacificaClient:
                         "side": pos['side'],  # bid=long, ask=short
                         "amount": amount,
                         "entry": entry,
-                        "value": amount * entry,  # USD value позиции
+                        "value": amount * entry,  # USD value
                         "margin": float(pos.get('margin', 0))
                          #"margin": "0", // only shown for isolated margin
                     }
                 except (KeyError, ValueError) as e:
-                    logger.warning(f"⚠️ Не удалось распарсить позицию {pos}: {e}")
+                    logger.warning(f"⚠️ Unable to parse position {pos}: {e}")
                     continue
-            logger.debug(f"📊 Позиции {wallet_address[:6]}: {list(positions.keys())}")
+            logger.debug(f"📊 Positions {wallet_address[:6]}: {list(positions.keys())}")
             return positions
-        logger.error(f"❌ Не удалось получить позиции для {wallet_address[:6]} после {max_retries} попыток")
+        logger.error(f"❌ Unable to retrieve positions for {wallet_address[:6]} after {max_retries} attempts")
         return {}
-
-
-
-        # positions = await self._fetch(endpoint)
-        #
-        # if positions:
-        #     for position in positions:
-        #         symbol = position['symbol']
-        #         side = position['side']
-        #         amount = position['amount']
-        #         entry_price = position['entry_price']
-        #         margin = position['margin']
 
 pacifica_client = PacificaClient()

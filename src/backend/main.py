@@ -9,8 +9,6 @@ from fastapi import FastAPI, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocket
 from dotenv import load_dotenv
-
-from services.manual_trade_service import ManualTradeService
 from services.trade_executor import CopyTradeExecutor
 
 load_dotenv()
@@ -26,7 +24,6 @@ from routers.manual_trades_router import router as manual_trades_router
 from db.schema import init_db
 from core.connection_manager import ws_manager
 from services.pacifica_ws import PacificaWSListener
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,7 +41,7 @@ if not DATABASE_URL:
 
     DATABASE_URL = f"postgresql://{user}:{password}@{host}:{port}/{db_name}"
 
-print(f"👉 ПЫТАЮСЬ ПОДКЛЮЧИТЬСЯ К БАЗЕ: {DATABASE_URL}")
+print(f"👉 CONNECTING TO: {DATABASE_URL}")
 WS_URL = "wss://ws.pacifica.fi/ws"
 
 ws_listener = None
@@ -79,12 +76,12 @@ async def lifespan(app: FastAPI):
     markets_list = pacifica_client.cache.get('markets', [])
 
     if not markets_list:
-        logger.error("❌ Рынки не загрузились при старте!")
+        logger.error("❌ The markets didn't load at startup!")
 
     ws_listener.set_markets(markets_list)
     listener_task = asyncio.create_task(ws_listener.start())
 
-    logger.info("🚀 Сервер запущен")
+    logger.info("🚀 The server is running")
     yield
 
     ws_listener.stop()
@@ -92,7 +89,7 @@ async def lifespan(app: FastAPI):
     client_task.cancel()
     listener_task.cancel()
     await db_pool.close()
-    logger.info("🛑 Сервер остановлен")
+    logger.info("🛑 The server has been stopped")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -119,7 +116,6 @@ app.include_router(manual_trades_router)
 @app.get("/")
 async def root():
     return {"message": "Pacifica CopyTrade API"}
-
 
 @app.websocket('/ws')
 async def websocket_endpoint(websocket: WebSocket):
@@ -151,7 +147,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             await ws_listener.unsubscribe(sub_id)
 
             except json.JSONDecodeError:
-                logger.warning("Получен невалидный JSON от клиента")
+                logger.warning("Invalid JSON received from the client")
 
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)

@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 POSITIONS_CACHE = {}
 CACHE_TTL = 60
 
-
 async def fetch_raw_positions_from_ws(account_address: str) -> list:
     ws_uri = "wss://ws.pacifica.fi/ws"
     api_key = os.getenv("PACIFICA_API_KEY")
@@ -40,36 +39,27 @@ async def fetch_raw_positions_from_ws(account_address: str) -> list:
 
 
 async def fetch_acc_positions(account_address: str) -> list:
-    """Умная функция-обертка: отдает данные из кэша и пересчитывает PNL"""
     current_time = time.time()
 
-    # 1. ПРОВЕРЯЕМ КЭШ
-    # Если позиций нет в кэше, или они старше CACHE_TTL (60 сек) - идем в WebSocket
     if account_address not in POSITIONS_CACHE or (
             current_time - POSITIONS_CACHE[account_address]['timestamp']) > CACHE_TTL:
         raw_positions = await fetch_raw_positions_from_ws(account_address)
 
-        # Сохраняем сырые позиции (без PNL) в кэш
-        if raw_positions:  # Кэшируем только если биржа реально что-то отдала
+        if raw_positions:
             POSITIONS_CACHE[account_address] = {
                 "timestamp": current_time,
                 "data": raw_positions
             }
         else:
-            # Если биржа вернула пустоту или ошибку, но в кэше есть старые данные, берем их
             raw_positions = POSITIONS_CACHE.get(account_address, {}).get("data", [])
     else:
-        # Иначе просто берем из кэша!
         raw_positions = POSITIONS_CACHE[account_address]['data']
 
-    # 2. ПЕРЕСЧИТЫВАЕМ PNL В РЕАЛЬНОМ ВРЕМЕНИ
-    # Независимо от того, откуда мы взяли сырые позиции, PNL мы считаем по самым СВЕЖИМ ценам!
     markets_data = pacifica_client.cache.get('top_volume', [])
     mark_prices = {m['symbol']: m['mark_price'] for m in markets_data}
 
     enriched_positions = []
     for pos in raw_positions:
-        # Важно: делаем копию словаря, чтобы не мутировать кэш
         pos_copy = dict(pos)
 
         sym = pos_copy.get('s')

@@ -8,7 +8,6 @@ from core.security import crypto_manager
 
 from fastapi import Depends
 
-from core.dependencies import verify_privy_token
 from core.dependencies import get_active_wallet
 
 logger = logging.getLogger(__name__)
@@ -59,13 +58,6 @@ async def save_agent_key(req: SaveAgentKeyRequest, request: Request, wallet: str
         "expiry_window": req.expiry_window,
         "agent_wallet": req.agent_public_key
     }
-
-    logger.info("============= START BIND =============")
-    logger.info(f"JWT Wallet: {wallet}")
-    logger.info(f"Signature: {req.signature}")
-    logger.info(f"Timestamp: {req.timestamp}")
-    logger.info(f"Payload to Pacifica: {payload}")
-    logger.info("======================================")
 
     agent_public_key = req.agent_public_key
     pool = request.app.state.db_pool
@@ -131,5 +123,5 @@ async def get_auth_status(wallet: str, request: Request):
 
         return {"success": True, "wallet": wallet, "has_agent": has_agent}
     except Exception as e:
-        logger.error(f"Ошибка проверки статуса агента для {wallet}: {e}")
+        logger.error(f"Error checking agent status for {wallet}: {e}")
         return {"success": False, "error": str(e)}

@@ -16,7 +16,7 @@ from services.pacifica_client import pacifica_client
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────
-# БЛОК 1: ВСПОМОГАТЕЛЬНАЯ УТИЛИТА
+# SUPPORT UTILITY
 # ─────────────────────────────────────────────
 
 def format_lot_size(size: float, lot_size: float) -> float:
@@ -26,7 +26,7 @@ def format_lot_size(size: float, lot_size: float) -> float:
     return round(steps * lot_size, 8) #32452 * 0.00001 = 0.32452
 
 # ─────────────────────────────────────────────
-# БЛОК 2: ИНИЦИАЛИЗАЦИЯ И ФОНОВЫЕ ЗАДАЧИ
+# INITIALIZATION AND BACKGROUND TASKS
 # ─────────────────────────────────────────────
 
 class CopyTradeExecutor:
@@ -45,14 +45,14 @@ class CopyTradeExecutor:
         return self.fernet.decrypt(encrypted_key.encode()).decode()
 
 # ─────────────────────────────────────────────
-# БЛОК 3: ОРКЕСТРАЦИЯ — РАЗДАЧА СИГНАЛОВ
+#SIGNAL DISTRIBUTION
 # ─────────────────────────────────────────────
 
     async def process_master_signal(self, master_wallet: str, symbol: str, side: str,
                                     master_price: float, master_amount: float):
 
-        """Получает сигнал от мастера и раздаёт задачи всем подписчикам."""
-        logger.info(f"⚙️ EXECUTOR: сигнал от {master_wallet} ({side} {symbol} @ {master_price})")
+        """Receives a signal from the administrator and distributes tasks to all subscribers."""
+        logger.info(f"⚙️ EXECUTOR: signal from {master_wallet} ({side} {symbol} @ {master_price})")
 
         query = """
                    SELECT 
@@ -86,31 +86,22 @@ class CopyTradeExecutor:
             return
 
         tasks = []
-        #Меняем на лок экспошера по кошельку не по айди мастера
         for follower in followers:
-            user_wallet = follower['user_wallet']  # <-- Берем кошелек
-            if user_wallet not in self.subscription_locks:  # Можно переименовать словарь в user_locks потом, но пока пусть так
+            user_wallet = follower['user_wallet']
+            if user_wallet not in self.subscription_locks:
                 self.subscription_locks[user_wallet] = asyncio.Lock()
 
-            # Передаем user_wallet вместо sub_id в _execute_with_lock
             tasks.append(self._execute_with_lock(user_wallet, follower, symbol, side, master_price, master_amount,
                                                  master_wallet))
         await asyncio.gather(*tasks)
-        # for follower in followers:
-        #     sub_id = follower['subscription_id']
-        #     if sub_id not in self.subscription_locks:
-        #         self.subscription_locks[sub_id] = asyncio.Lock()
-        #     tasks.append(self._execute_with_lock(sub_id, follower, symbol, side, master_price, master_amount, master_wallet))
-        # await asyncio.gather(*tasks)
-
 
     async def _execute_with_lock(self, user_wallet, *args):
-        """Гарантирует что для одной подписки сигналы идут строго по очереди."""
+        """Ensures that signals are sent strictly in sequence for a single subscription."""
         async with self.subscription_locks[user_wallet]:
             await self.execute_user_order(*args)
 
 # ─────────────────────────────────────────────
-# БЛОК 4: ИСПОЛНЕНИЕ — ЛОГИКА ОДНОЙ СДЕЛКИ
+#EXECUTION — THE LOGIC OF A SINGLE TRANSACTION
 # ─────────────────────────────────────────────
 
     async def execute_user_order(self, follower: dict, symbol: str, side: str,
@@ -206,15 +197,14 @@ class CopyTradeExecutor:
             except Exception:
                 logger.error(f"❌ CRITICAL ERROR for  {wallet[:6]}", exc_info=True)
 # ─────────────────────────────────────────────
-# БЛОК 5: ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ РАСЧЁТОВ
+#AUXILIARY CALCULATION METHODS
 # ─────────────────────────────────────────────
 
     async def _calc_close_amount(self, sub_id: int, symbol: str, master_amount: float,
                                  wallet: str, real_positions: dict, master_wallet: str):
-        """Считает объём для закрытия, сверяясь с реальной позой мастера по REST."""
+        """Calculates the volume for closing, checking against the actual REST master's position."""
 
-        # 1. Запрос к бирже по МАСТЕРУ
-        logger.info(f"📡 Запрос REST для МАСТЕРА {master_wallet[:6]} по {symbol}...")
+        logger.info(f"📡 REST request for MASTER {master_wallet[:6]} for {symbol}...")
         m_positions = await pacifica_client.fetch_user_positions(master_wallet)
         m_pos = m_positions.get(symbol)
 
@@ -227,17 +217,15 @@ class CopyTradeExecutor:
             logger.warning(f"⚠️ Unable to calculate the ratio: total volume of the master <= 0")
             return None
 
-        # 2. Высчитываем Ratio
         close_ratio = master_amount / total_m_before
 
-        # ✅ ПРАВИЛО 95% = 100% (Self-Healing)
+        # ✅ THE 95% RULE = 100% (Self-Healing)
         if close_ratio > 0.9:
             close_ratio = 1.0
             logger.info(f"🎯 Ratio {close_ratio:.4f} > 0.9. 100% forced close (Full Close).")
         else:
             logger.info(f"📊 Calculated Ratio: {close_ratio:.4f} ({close_ratio * 100:.1f}%)")
 
-        # 3. Применяем к юзеру
         u_pos = real_positions.get(symbol)
         if not u_pos:
             logger.warning(f"⚠️ The user does not have an active position {symbol} on the exchange. Synchronizing the database...")
@@ -248,65 +236,32 @@ class CopyTradeExecutor:
         raw_amount = u_pos['amount'] * close_ratio
         logger.info(f"📐 The user holds {u_pos['amount']}. At close:  {raw_amount:.8f} (based on Ratio)")
 
-        # ID из базы для последующего апдейта
         agg = await self.db_pool.fetchrow(
             "SELECT array_agg(id) as ids FROM copied_trades WHERE subscription_id = $1 AND symbol = $2 AND status = 'open'",
             sub_id, symbol)
 
         return close_ratio, raw_amount, agg['ids'] if agg and agg['ids'] else []
-        # agg_data = await self.db_pool.fetchrow("""
-        #         SELECT array_agg(id) as ids,
-        #                COALESCE(SUM(master_size), 0) as total_m_size
-        #         FROM copied_trades
-        #         WHERE subscription_id = $1 AND symbol = $2 AND status = 'open'
-        #     """, sub_id, symbol)
-        #
-        # if not agg_data or not agg_data['ids']:
-        #     logger.warning(f"⚠️ Нет открытых сделок по {symbol} для sub_id={sub_id}")
-        #     return None
-        #
-        # # real_positions = await pacifica_client.fetch_user_positions(wallet)
-        # real_pos = real_positions.get(symbol)
-        #
-        # if not real_pos:
-        #     logger.warning(f"⚠️ Позиции {symbol} нет на бирже, закрываем записи в БД")
-        #     await self.db_pool.execute(
-        #         "UPDATE copied_trades SET status = 'closed' WHERE id = ANY($1)",
-        #         agg_data['ids']
-        #     )
-        #     return None
-        #
-        # total_m_size = float(agg_data['total_m_size'])
-        # close_ratio = min(master_amount / total_m_size, 1.0) if total_m_size > 0 else 1.0
-        # raw_amount = real_pos['amount'] * close_ratio  # ← реальный размер
-        #
-        # return close_ratio, raw_amount, agg_data['ids']
-
 
     async def _calc_open_amount(self, follower: dict, sub_id: int, symbol: str,
                             price: float, master_amount: float, real_positions: dict):
 
         """
-        Считает объём для открытия/докупки.
+        Calculates the volume for opening/adding to a position.
 
-        Логика:
-        - Первый вход: volume_per_trade_usd / price
-        - Докупка: пропорционально позиции мастера
-        - В обоих случаях: кэп по max_total_exposure_usd
+        Logic:
+        - First entry: volume_per_trade_usd / price
+        - Additional purchase: proportional to the master position
+        - In both cases: capped at max_total_exposure_usd
 
-        Возвращает raw_amount или None если нужно пропустить сделку.
+        Returns raw_amount or None if the trade should be skipped.
         """
         wallet = follower['user_wallet']
         max_limit = float(follower.get('max_total_exposure_usd', 500))
         min_notional = 10.1
         volume_per_trade = float(follower['volume_per_trade_usd'])
 
-        # real_positions = await pacifica_client.fetch_user_positions(wallet)
-
-        # Текущий exposure юзера по всем его подпискам
         current_exposure = sum(p['value'] for p in real_positions.values())
 
-        # Жёсткий стоп — exposure уже на лимите
         if current_exposure >= max_limit:
             logger.warning(f"🚫 LIMIT REACHED: ${current_exposure:.2f} >= ${max_limit:.2f}")
             return None
@@ -320,7 +275,6 @@ class CopyTradeExecutor:
         real_pos = real_positions.get(symbol)
 
         if real_pos:
-            # Докупка — реальный amount с биржи
             pos_info = await self.db_pool.fetchrow("""
                     SELECT COALESCE(SUM(master_size), 0) as m_total
                     FROM copied_trades 
@@ -355,7 +309,7 @@ class CopyTradeExecutor:
     async def _sign_and_send(self, follower, wallet, sub_id, symbol, side, api_side,
                              amount_str, formatted_size, price, master_amount,
                              is_reduce_only, trade_record_ids, close_ratio):
-        """Подписывает ордер и отправляет через WebSocket. Обновляет БД по результату."""
+        """Signs the order and sends it via WebSocket. Updates the database based on the result."""
 
         agent_priv_str = self._decrypt_key(follower['agent_priv'])
         keypair = Keypair.from_base58_string(agent_priv_str)
@@ -403,8 +357,8 @@ class CopyTradeExecutor:
                 logger.warning(f"⚠️ WS attempt {attempt + 1}/{max_ws_retries} failed for {wallet[:6]}: {e}")
                 if attempt == max_ws_retries - 1:
                     logger.error(f"❌ The WS has finally dropped for {wallet[:6]}. The transaction was not sent.")
-                    return  # Прерываем выполнение
-                await asyncio.sleep(0.5)  # Пауза перед ретраем
+                    return
+                await asyncio.sleep(0.5)
         if not response: return
 
         if response.get("code") == 200:
@@ -416,7 +370,6 @@ class CopyTradeExecutor:
         else:
             err_msg = response.get('err', '')
             logger.error(f"❌ EXCHANGE ERROR for {wallet[:6]}: {err_msg}")
-            # Самовосстановление: биржа говорит что позиции нет — закрываем в БД
             if is_reduce_only and trade_record_ids and (
                     response.get("code") == 420 or "No position" in err_msg):
                 await self.db_pool.execute(
@@ -428,23 +381,20 @@ class CopyTradeExecutor:
     async def _handle_success(self, is_reduce_only, close_ratio, trade_record_ids,
                               sub_id, client_order_id, symbol, api_side,
                               formatted_size, price, master_amount):
-        """Обновляет БД после успешного исполнения ордера."""
+        """Updates the database after the order has been successfully executed."""
         if is_reduce_only:
             if close_ratio >= 0.99:
-                # Полное закрытие — помечаем все записи как closed
                 await self.db_pool.execute(
                     "UPDATE copied_trades SET status = 'closed' WHERE id = ANY($1)",
                     trade_record_ids
                 )
             else:
-                # Частичное закрытие — уменьшаем size пропорционально
                 remain = 1.0 - close_ratio
                 await self.db_pool.execute(
                     "UPDATE copied_trades SET size = size * $1, master_size = master_size * $1 WHERE id = ANY($2)",
                     remain, trade_record_ids
                 )
         else:
-            # Открытие — логируем новую сделку
             await self._log_copied_trade(
                 sub_id, client_order_id, symbol, api_side,
                 formatted_size, price, master_amount
@@ -452,7 +402,7 @@ class CopyTradeExecutor:
 
     async def _log_copied_trade(self, sub_id, order_id, symbol, side,
                                 size, price, master_size):
-        """Записывает новую скопированную сделку в БД."""
+        """Saves the newly copied transaction to the database."""
         query = """
                 INSERT INTO copied_trades 
                 (subscription_id, follower_trade_id, symbol, side, size, entry_price, status, master_size)

@@ -1,10 +1,9 @@
 import logging
-from fastapi import APIRouter, Request, Body, HTTPException
+from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from fastapi import Depends
 
-from core.dependencies import verify_privy_token
 from core.dependencies import get_active_wallet
 
 logger = logging.getLogger(__name__)
@@ -81,33 +80,6 @@ async def unfollow_master(req: UnfollowRequest, request: Request, wallet: str = 
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# @router.post("/toggle")
-# async def toggle_subscription(req: ToggleRequest, request: Request, token_data: dict = Depends(verify_privy_token)):
-#     pool = request.app.state.db_pool
-#
-#     query = """
-#         UPDATE subscriptions
-#         SET is_active = $2, updated_at = CURRENT_TIMESTAMP
-#         WHERE id = $1
-#         RETURNING id, is_active, master_wallet;
-#     """
-#
-#     try:
-#         async with pool.acquire() as conn:
-#             row = await conn.fetchrow(query, req.subscription_id, req.is_active)
-#             if not row:
-#                 raise HTTPException(status_code=404, detail="Subscription not found")
-#
-#             ws_listener = getattr(request.app.state, 'ws_listener', None)
-#             if ws_listener:
-#                 master_wallet = row['master_wallet']
-#                 if req.is_active:
-#                     await ws_listener.add_master_instantly(master_wallet)
-#                 else:
-#                     await ws_listener.remove_master_instantly(master_wallet)
-#             return {"success": True, "status": dict(row)}
-#     except Exception as e:
-#         return {"success": False, "error": str(e)}
 @router.post("/toggle")
 async def toggle_subscription(
     req: ToggleRequest,

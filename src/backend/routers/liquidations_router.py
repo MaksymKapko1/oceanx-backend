@@ -1,5 +1,4 @@
 import time
-from typing import Optional
 
 from fastapi import APIRouter, Request, Query
 import logging
@@ -29,7 +28,7 @@ async def get_recent_liquidations(
             rows = await conn.fetch(query, limit)
             return [dict(row) for row in rows]
     except Exception as e:
-        logger.error(f"❌ Ошибка при получении ликвидаций из БД: {e}")
+        logger.error(f"❌ Error retrieving liqs from the database: {e}")
         return {"error": "Internal server error", "details": str(e)}
 
 
@@ -44,16 +43,13 @@ async def get_liquidation_history(
 ):
     pool = request.app.state.db_pool
 
-    # 1. Формируем WHERE фильтры и список аргументов
     where_parts = []
     query_args = []
 
-    # Фильтр по монете
     if symbol != "ALL":
         query_args.append(symbol)
         where_parts.append(f"coin = ${len(query_args)}")
 
-    # Фильтр по времени (24 часа)
     if period == "24h":
         day_ago_ms = int(time.time() * 1000) - 86400000
         query_args.append(day_ago_ms)
@@ -61,12 +57,9 @@ async def get_liquidation_history(
 
     where_clause = " WHERE " + " AND ".join(where_parts) if where_parts else ""
 
-    # 2. Определяем сортировку (основная магия тут)
-    # Всегда добавляем timestamp DESC вторым параметром, чтобы при одинаковых суммах была логика времени
+
     order_by = f"usd_amount {sort_order.upper()}, timestamp DESC"
 
-    # 3. Собираем финальный запрос
-    # Нам нужно еще добавить limit и offset в аргументы
     query_args.append(limit)
     limit_idx = len(query_args)
 
@@ -89,14 +82,13 @@ async def get_liquidation_history(
                 "data": [dict(row) for row in rows]
             }
     except Exception as e:
-        logger.error(f"❌ Ошибка загрузки истории ликвидаций: {e}")
+        logger.error(f"❌ Error loading the liquidation history: {e}")
         return {"success": False, "error": str(e)}
 
 
 @router.get("/summary")
 async def get_liquidation_summary(request: Request):
     pool = request.app.state.db_pool
-    # 24 часа назад в миллисекундах
     day_ago_ms = int(time.time() * 1000) - 86400000
 
     query = """
@@ -113,5 +105,5 @@ async def get_liquidation_summary(request: Request):
             row = await conn.fetchrow(query, day_ago_ms)
             return {"success": True, "data": dict(row)}
     except Exception as e:
-        logger.error(f"❌ Ошибка статистики: {e}")
+        logger.error(f"❌ Statistical error: {e}")
         return {"success": False, "error": str(e)}

@@ -2,8 +2,6 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from services.manual_trade_service import ManualTradeService
 from fastapi import Depends
-
-from core.dependencies import verify_privy_token
 from core.dependencies import get_active_wallet
 
 router = APIRouter(prefix="/api/manual-trades", tags=["Manual Trades"])

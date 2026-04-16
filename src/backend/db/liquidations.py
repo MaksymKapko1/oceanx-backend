@@ -19,7 +19,7 @@ async def insert_liquidation(pool: asyncpg.Pool, liq_data: dict):
                 liq_data["liq_type"], liq_data["timestamp"], liq_data["nonce"]
             )
     except Exception as e:
-        logger.error(f"⚠️ Ошибка записи ликвидации {liq_data.get('trade_id')} в БД: {e}")
+        logger.error(f"⚠️ Error in the write-off entry {liq_data.get('trade_id')} in DB: {e}")
 
 async def get_24h_liquidations_volume(pool: asyncpg.Pool) -> float:
     twenty_four_hours_ago = int(time.time()  * 1000) - 86400000
@@ -33,7 +33,7 @@ async def get_24h_liquidations_volume(pool: asyncpg.Pool) -> float:
             result = await conn.fetchval(query, twenty_four_hours_ago)
             return float(result) if result else 0.0
     except Exception as e:
-        logger.error(f"⚠️ Ошибка при подсчете ликвидаций за 24ч: {e}")
+        logger.error(f"⚠️ Error in calculating liquidations over the past 24 hours: {e}")
         return 0.0
 
 async def get_historical_liquidations(pool: asyncpg.Pool) -> list[dict]:
@@ -50,5 +50,5 @@ async def get_historical_liquidations(pool: asyncpg.Pool) -> list[dict]:
             rows = await conn.fetch(query)
             return [{"time": row["day_ts"], "value": row["daily_usd"]} for row in rows]
     except Exception as e:
-        logger.error(f"⚠️ Ошибка чтения истории ликвидаций: {e}")
+        logger.error(f"⚠️ Misinterpretation of the history of liquidations: {e}")
         return []

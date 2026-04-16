@@ -71,7 +71,7 @@ async def get_pnl_1d_leaderboard(
                             master["is_followed"] = True
                             master["is_reverse"] = subs_map[addr]
             except Exception as e:
-                logger.error(f"Ошибка проверки подписок для лидерборда: {e}")
+                logger.error(f"Subscription validation error for the leaderboard: {e}")
 
     return {
         "success": True,
@@ -85,7 +85,7 @@ async def get_trader_positions(address: str):
         positions = await fetch_acc_positions(address)
         return {"success": True, "data": positions}
     except Exception as e:
-        logger.error(f"Ошибка получения позиций для {address}: {e}")
+        logger.error(f"Error retrieving positions for {address}: {e}")
         return {"success": False, "data": []}
 
 @router.get('/prices')

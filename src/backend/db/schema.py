@@ -117,4 +117,4 @@ async def init_db(pool: asyncpg.Pool):
 
         logger.info("✅ The database (liqs, volume, users, subs, copied_trades, agents, risk table) and indexes have been successfully initialized")
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка при инициализации БД: {e}")
+        logger.error(f"❌ Critical error during database initialization: {e}")

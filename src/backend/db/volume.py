@@ -17,10 +17,9 @@ async def insert_daily_volume(pool: asyncpg.Pool, timestamp: int, usd_volume: fl
                 timestamp,
                 usd_volume
             )
-            logger.debug(f"📊 Объем за {timestamp} сохранен: ${usd_volume:,.2f}")
+            logger.debug(f"📊 Volume per {timestamp} saved: ${usd_volume:,.2f}")
     except Exception as e:
-        logger.error(f"⚠️ Ошибка записи объема за {timestamp} в БД: {e}")
-
+        logger.error(f"⚠️ Error recording the volume for {timestamp} in DB: {e}")
 
 async def get_historical_volume(pool: asyncpg.Pool) -> list[dict]:
     query = """
@@ -33,5 +32,5 @@ async def get_historical_volume(pool: asyncpg.Pool) -> list[dict]:
             rows = await conn.fetch(query)
             return [{"time": row["timestamp"], "value": row["usd_volume"]} for row in rows]
     except Exception as e:
-        logger.error(f"⚠️ Ошибка чтения истории объемов из БД: {e}")
+        logger.error(f"⚠️ Error reading volume history from the database: {e}")
         return []
