@@ -1,6 +1,7 @@
 import os
 import json
 import time
+from typing import Union
 
 import requests
 from fastapi import HTTPException, Security, Depends
@@ -34,8 +35,12 @@ def get_jwks(force_refresh=False):
     return _PRIVY_JWKS
 
 
-def verify_privy_token(credentials: HTTPAuthorizationCredentials = Security(security)) -> dict:
-    token = credentials.credentials
+def verify_privy_token(credentials: Union[HTTPAuthorizationCredentials, str] = Security(security)) -> dict:
+    if isinstance(credentials, str):
+        token = credentials
+    else:
+        token = credentials.credentials
+
     try:
         return jwt.decode(token, get_jwks(), algorithms=["ES256"],
                           issuer="privy.io", audience=PRIVY_APP_ID)

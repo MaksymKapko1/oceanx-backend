@@ -1,11 +1,13 @@
 import asyncio
 import logging
 import json
+import time
+
 import uvicorn
 import asyncpg
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocketDisconnect
+from fastapi import FastAPI, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocket
 from dotenv import load_dotenv
@@ -24,6 +26,7 @@ from routers.manual_trades_router import router as manual_trades_router
 from db.schema import init_db
 from core.connection_manager import ws_manager
 from services.pacifica_ws import PacificaWSListener
+from core.dependencies import verify_privy_token
 
 logging.basicConfig(
     level=logging.INFO,
@@ -119,35 +122,78 @@ async def root():
 
 @app.websocket('/ws')
 async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        auth_msg_raw = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+        auth_data = json.loads(auth_msg_raw)
+
+        if auth_data.get('action') != 'auth':
+            await websocket.close(code=4001, reason="Auth required as first message")
+            return
+
+        token = auth_data.get('token')
+        if token and token != "null":
+            try:
+                user_info = verify_privy_token(token)
+                if not user_info:
+                    await websocket.close(code=4003, reason="Invalid token")
+                    return
+            except HTTPException:
+                await websocket.close(code=4003, reason="Token verification failed")
+                return
+            except Exception as e:
+                logger.error(f"WS Auth Error: {e}")
+                await websocket.close(code=4003, reason="Token error")
+                return
+    except asyncio.TimeoutError:
+        await websocket.close(code=4001, reason="Auth timeout")
+        return
+    except Exception as e:
+        await websocket.close(code=4000, reason="Invalid format")
+        return
+
     await ws_manager.connect(websocket)
+
+    MAX_MESSAGES_PER_MINUTE = 60
+    message_count = 0
+    start_time = time.time()
 
     user_subscriptions = set()
 
     try:
         while True:
             data = await websocket.receive_text()
-            try:
-                msg = json.loads(data)
-                action = msg.get("action")
-                params = msg.get("params")
 
-                if not params:
-                    continue
+            current_time = time.time()
+            if current_time - start_time > 60:
+                start_time = current_time
+                message_count = 0
+            message_count += 1
+            if message_count > MAX_MESSAGES_PER_MINUTE:
+                await websocket.close(code=4029, reason="Rate limit exceeded")
+                break
 
-                if action == "subscribe":
-                    if ws_listener:
-                        sub_id = await ws_listener.subscribe(params)
-                        user_subscriptions.add(sub_id)
+            msg = json.loads(data)
+            action = msg.get("action")
+            params = msg.get("params")
 
-                elif action == "unsubscribe":
-                    if ws_listener:
-                        sub_id = ws_listener._generate_sub_id(params)
-                        if sub_id in user_subscriptions:
-                            user_subscriptions.remove(sub_id)
-                            await ws_listener.unsubscribe(sub_id)
+            if not params or not isinstance(params, dict):
+                continue
 
-            except json.JSONDecodeError:
-                logger.warning("Invalid JSON received from the client")
+            if action == "subscribe":
+                if ws_listener:
+                    sub_id = await ws_listener.subscribe(params)
+                    user_subscriptions.add(sub_id)
+
+            elif action == "unsubscribe":
+                if ws_listener:
+                    sub_id = ws_listener._generate_sub_id(params)
+                    if sub_id in user_subscriptions:
+                        user_subscriptions.remove(sub_id)
+                        await ws_listener.unsubscribe(sub_id)
+
+    except json.JSONDecodeError:
+        logger.warning("Invalid JSON received from the client")
 
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
