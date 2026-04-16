@@ -127,6 +127,21 @@ async def get_risk_settings(wallet: str, request: Request):
         logger.error(f"❌ Error unloading settings for {wallet}: {e}")
         return {"success": False, "error": str(e)}
 
+@router.get("/builder-status")
+async def get_builder_status(request: Request, wallet: str = Depends(get_active_wallet)):
+    db_pool = request.app.state.db_pool
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT builder_approved 
+            FROM users 
+            WHERE wallet_address = $1
+        """, wallet)
+
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {"is_approved": row["builder_approved"] or False}
 
 @router.post("/update-builder-status")
 async def update_builder_status(req: BuilderStatusUpdate, request: Request,
