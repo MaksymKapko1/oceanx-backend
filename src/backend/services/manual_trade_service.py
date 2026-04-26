@@ -1,9 +1,12 @@
 import asyncio
 import json
+import math
 import time
 import uuid
 import logging
 import os
+
+import aiohttp
 import websockets
 from cryptography.fernet import Fernet
 from solders.keypair import Keypair
@@ -11,6 +14,8 @@ from solders.keypair import Keypair
 from common.utils import sign_message
 from common.constants import WS_URL
 from services.pacifica_client import pacifica_client
+
+from common.constants import REST_URL
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +44,7 @@ class ManualTradeService:
             return await conn.fetchrow(query, wallet)
 
     async def close_position(self, wallet: str, symbol: str):
-        """Closes a specific user session."""
+        """Closes a specific user session. VIA WEBSOCKET CONNECTION"""
         logger.info(f"🛑 Запрос на ручное закрытие {symbol} для {wallet[:6]}")
 
         agent_data = await self._get_agent_wallet(wallet)
@@ -87,8 +92,9 @@ class ManualTradeService:
             logger.error(f"❌ Manual closure error {symbol}: {err_msg}")
             return {"success": False, "error": err_msg}
 
+
     async def close_all_positions(self, wallet: str):
-        """Closes all open positions in the wallet."""
+        """Closes all open positions in the wallet. VIA WEBSOCKET CONNECTION"""
         logger.info(f"☢️Request to close ALL positions for {wallet[:6]}")
         positions = await pacifica_client.fetch_user_positions(wallet)
 
@@ -157,3 +163,77 @@ class ManualTradeService:
                 await asyncio.sleep(0.5)
 
         return False, "WebSocket timeout / connection failed"
+
+    #--------------------------
+    #REST API
+    #--------------------------
+    async def open_position(self, wallet: str, symbol: str, side: str, size_usd: float):
+        logger.info(f"🟢 [REST] Запрос на открытие {side.upper()} {symbol} на ${size_usd} для {wallet[:6]}")
+
+        agent_data = await self._get_agent_wallet(wallet)
+        if not agent_data:
+            return {"success": False, "error": "Agent wallet not found"}
+
+        market_info = pacifica_client.cache.get('market_info', {}).get(symbol)
+        mark_price = next(
+            (m['mark_price'] for m in pacifica_client.cache.get('top_volume', []) if m['symbol'] == symbol), 0)
+
+        if not market_info or mark_price <= 0:
+            return {"success": False, "error": f"Market info or price not available for {symbol}"}
+
+        raw_amount = size_usd / mark_price
+        lot_size = market_info['lot_size']
+        formatted_size = round(math.floor(raw_amount / lot_size) * lot_size, 8)
+
+        if formatted_size <= 0:
+            return {"success": False, "error": "Order size too small"}
+
+        amount_str = f"{formatted_size:f}".rstrip('0').rstrip('.')
+        api_side = "bid" if side == "long" else "ask"
+
+        agent_pub = agent_data['public_key']
+        agent_priv_str = self._decrypt_key(agent_data['encrypted_private_key'])
+        keypair = Keypair.from_base58_string(agent_priv_str)
+        max_slippage = str(agent_data['max_slippage'] or 1.0)
+        builder_code = "redwingss" if agent_data.get('builder_approved') else None #TODO добавить норм проверку если не подписались на код
+        timestamp = int(time.time() * 1000)
+
+        payload = {
+            "symbol": symbol,
+            "amount": amount_str,
+            "side": api_side,
+            "slippage_percent": max_slippage,
+            "reduce_only": False,
+            "client_order_id": str(uuid.uuid4())
+        }
+
+        if builder_code:
+            payload["builder_code"] = builder_code
+
+        _, signature = sign_message(
+            {"timestamp": timestamp, "expiry_window": 5000, "type": "create_market_order"},
+            payload, keypair
+        )
+
+        request_body = {
+            "account": wallet,
+            "agent_wallet": agent_pub,
+            "signature": signature,
+            "timestamp": timestamp,
+            "expiry_window": 5000,
+            **payload
+        }
+
+        url = f"{REST_URL}/orders/create_market"
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=request_body) as resp:
+                    resp_data = await resp.json()
+                    if resp.status == 200 and ("order_id" in resp_data or resp_data.get("success")):
+                        return {"success": True, "message": f"Opened {side} on {symbol}"}
+                    else:
+                        err = resp_data.get('error') or resp_data
+                        return {"success": False, "error": str(err)}
+        except Exception as e:
+            return {"success": False, "error": "Network error while sending order"}

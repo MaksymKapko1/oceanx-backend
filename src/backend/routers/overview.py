@@ -30,6 +30,7 @@ async def get_market_overview(request: Request):
             'open_interest': open_interest,
             'liquidations_24h': liquidations_24h,
             'active_markets': len(pacifica_client.cache.get('markets', [])),
+            'market_symbols': pacifica_client.cache.get('markets', []),
             'top_volume': top_volume,
             'top_oi': top_oi,
         }
