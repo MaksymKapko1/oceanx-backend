@@ -164,40 +164,40 @@ class ManualTradeService:
 
         return False, "WebSocket timeout / connection failed"
 
-    #--------------------------
-    #REST API
-    #--------------------------
-    async def open_position(self, wallet: str, symbol: str, side: str, size_usd: float):
-        logger.info(f"🟢 [REST] Запрос на открытие {side.upper()} {symbol} на ${size_usd} для {wallet[:6]}")
+    # --------------------------
+    # REST API
+    # --------------------------
 
-        agent_data = await self._get_agent_wallet(wallet)
-        if not agent_data:
-            return {"success": False, "error": "Agent wallet not found"}
+    def _prepare_rest_order_data(self, wallet: str, symbol: str, api_side: str, size_usd: float,
+                                 agent_data: dict) -> dict:
+        """Вспомогательный метод: расчет лотов, сборка payload и крипто-подпись"""
 
+        # 1. Считаем сайз
         market_info = pacifica_client.cache.get('market_info', {}).get(symbol)
         mark_price = next(
             (m['mark_price'] for m in pacifica_client.cache.get('top_volume', []) if m['symbol'] == symbol), 0)
 
         if not market_info or mark_price <= 0:
-            return {"success": False, "error": f"Market info or price not available for {symbol}"}
+            raise ValueError(f"Market info or price not available for {symbol}")
 
         raw_amount = size_usd / mark_price
         lot_size = market_info['lot_size']
         formatted_size = round(math.floor(raw_amount / lot_size) * lot_size, 8)
 
         if formatted_size <= 0:
-            return {"success": False, "error": "Order size too small"}
+            raise ValueError(f"Order size too small for {symbol}")
 
         amount_str = f"{formatted_size:f}".rstrip('0').rstrip('.')
-        api_side = "bid" if side == "long" else "ask"
 
+        # 2. Подготовка ключей
         agent_pub = agent_data['public_key']
         agent_priv_str = self._decrypt_key(agent_data['encrypted_private_key'])
         keypair = Keypair.from_base58_string(agent_priv_str)
         max_slippage = str(agent_data['max_slippage'] or 1.0)
-        builder_code = "redwingss" if agent_data.get('builder_approved') else None #TODO добавить норм проверку если не подписались на код
+        builder_code = "redwingss" if agent_data.get('builder_approved') else None
         timestamp = int(time.time() * 1000)
 
+        # 3. Payload для подписи
         payload = {
             "symbol": symbol,
             "amount": amount_str,
@@ -215,7 +215,8 @@ class ManualTradeService:
             payload, keypair
         )
 
-        request_body = {
+        # 4. Итоговый объект для отправки
+        return {
             "account": wallet,
             "agent_wallet": agent_pub,
             "signature": signature,
@@ -224,11 +225,28 @@ class ManualTradeService:
             **payload
         }
 
+    async def open_position(self, wallet: str, symbol: str, side: str, size_usd: float):
+        """Открывает одиночную позицию через REST"""
+        logger.info(f"🟢 [REST] Запрос на открытие {side.upper()} {symbol} на ${size_usd} для {wallet[:6]}")
+
+        agent_data = await self._get_agent_wallet(wallet)
+        if not agent_data:
+            return {"success": False, "error": "Agent wallet not found"}
+
+        api_side = "bid" if side == "long" else "ask"
+
+        try:
+            # Получаем готовую дату с подписью из нашего хелпера
+            request_body = self._prepare_rest_order_data(wallet, symbol, api_side, size_usd, agent_data)
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+
         url = f"{REST_URL}/orders/create_market"
+        headers = {"Content-Type": "application/json"}
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=request_body) as resp:
+                async with session.post(url, json=request_body, headers=headers) as resp:
                     resp_data = await resp.json()
                     if resp.status == 200 and ("order_id" in resp_data or resp_data.get("success")):
                         return {"success": True, "message": f"Opened {side} on {symbol}"}
@@ -237,3 +255,44 @@ class ManualTradeService:
                         return {"success": False, "error": str(err)}
         except Exception as e:
             return {"success": False, "error": "Network error while sending order"}
+
+    async def execute_hedge(self, wallet: str, long_symbol: str, short_symbol: str, size_usd: float):
+        """Исполняет Хедж сделку через REST Batch API"""
+        logger.info(
+            f"⚖️ [REST] Запрос на ХЕДЖ: LONG {long_symbol} / SHORT {short_symbol} по ${size_usd} для {wallet[:6]}")
+
+        agent_data = await self._get_agent_wallet(wallet)
+        if not agent_data:
+            return {"success": False, "error": "Agent wallet not found"}
+
+        try:
+            # 1. Готовим данные для обеих ног через наш чистый хелпер
+            long_data = self._prepare_rest_order_data(wallet, long_symbol, "bid", size_usd, agent_data)
+            short_data = self._prepare_rest_order_data(wallet, short_symbol, "ask", size_usd, agent_data)
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+
+        # 2. Собираем массив actions строго по докам Pacifica (Batch API)
+        request_list = [
+            {"type": "CreateMarket", "data": long_data},
+            {"type": "CreateMarket", "data": short_data}
+        ]
+
+        url = f"{REST_URL}/orders/batch"
+        headers = {"Content-Type": "application/json"}
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json={"actions": request_list}, headers=headers) as resp:
+                    resp_data = await resp.json()
+
+                    if resp.status == 200 and resp_data.get("success"):
+                        logger.info(f"✅ Хедж успешно исполнен для {wallet[:6]}")
+                        return {"success": True, "message": "Hedge executed successfully"}
+                    else:
+                        err = resp_data.get('error') or resp_data
+                        logger.error(f"❌ Ошибка биржи при хеджировании: {err}")
+                        return {"success": False, "error": str(err)}
+        except Exception as e:
+            logger.error(f"❌ Ошибка сети при хеджировании: {e}")
+            return {"success": False, "error": "Network error while sending batch"}
