@@ -146,6 +146,9 @@ async def get_builder_status(request: Request, wallet: str = Depends(get_active_
 @router.post("/update-builder-status")
 async def update_builder_status(req: BuilderStatusUpdate, request: Request,
                                 wallet: str = Depends(get_active_wallet)):
+    if not req.is_approved:
+        return {"success": True, "message": "Ignored false payload to protect DB"}
+
     db_pool = request.app.state.db_pool
 
     async with db_pool.acquire() as conn:
@@ -153,6 +156,6 @@ async def update_builder_status(req: BuilderStatusUpdate, request: Request,
             UPDATE users 
             SET builder_approved = $1 
             WHERE wallet_address = $2
-        """, req.is_approved, wallet)
+        """, True, wallet)
 
     return {"success": True, "message": "Builder status updated"}
